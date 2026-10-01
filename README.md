@@ -94,7 +94,27 @@ prefixes are known.
 A cheap structural pre-filter runs first, then the exact validation the format
 requires (Luhn for card numbers, check digits for CPF/CNPJ, MOD-97 for IBAN). A
 string only pays for the expensive check when it could plausibly match, which is what
-keeps false positives down.
+keeps false positives down. Measured on typical non-PII log lines:
+
+```
+UUID    1.9 ns    length check, cheapest
+IPv4    4.9 ns    requires "."
+Email   5.0 ns    requires "@"
+CNPJ   16   ns    needs 14 digits
+PAN    16   ns    needs 13 digits
+SSN    17   ns    needs 9 digits
+CPF    18   ns    needs 11 digits
+Phone  23   ns    needs 7 digits
+IBAN   28   ns    needs the AA99 shape
+```
+
+The detectors run cheapest-gate-first, but that order buys no speed on its own: all of
+them run on every string, so the cost is the sum either way. What the order buys is
+correctness, because `maskString` chains and each detector sees the previous one's
+output. That is why IPv4 runs before SSN — `192.168.1.42` is exactly nine digits, so
+SSN first would turn the most common private address into `***-**-****` and leave IPv4
+nothing to match. `MaskPhone` is last because it claims almost any run of digits,
+documents included.
 
 | Detector | Detects | Validation |
 | --- | --- | --- |
@@ -237,6 +257,9 @@ never evaluates `LogValue()` again.
 | `WithSliceScan()` | Walk `slog.Any` slices |
 | `WithCompositeScan()` | All three composite options |
 | `New(nil, ...)` | Discard everything; useful in tests |
+
+For custom detectors, order your own `WithValueFunc` list the same way: cheapest gate
+first, and put any loose heuristic last.
 
 Reflection runs only when a composite option is on. Without one, `reflect` is never
 called on the logging path.

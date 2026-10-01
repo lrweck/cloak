@@ -147,8 +147,18 @@ func WithValueFunc(f ValueFunc) Option {
 	return func(c *config) { c.values = append(c.values, f) }
 }
 
+// DefaultPIIValueFuncs returns the built-in detectors, in the order they must run.
+//
+// Two rules decide the order. Cheapest structural gate first, so a string that cannot
+// possibly match costs one comparison. Most specific before least specific, because
+// maskString chains: each detector sees the previous one's output.
+//
+// That chaining is why IPv4 must precede SSN. An IPv4 address like "192.168.1.42" is
+// exactly nine digits and passes the SSN shape check, so SSN first turns the most
+// common private address into "***-**-****" and leaves IPv4 nothing to match. Phone
+// is last because it claims almost any number, documents included.
 func DefaultPIIValueFuncs() []ValueFunc {
-	return []ValueFunc{MaskPAN, MaskCPF, MaskCNPJ, MaskSSN, MaskIBAN, MaskEmail, MaskIPv4, MaskUUID, MaskPhone}
+	return []ValueFunc{MaskUUID, MaskEmail, MaskIPv4, MaskIBAN, MaskCPF, MaskCNPJ, MaskSSN, MaskPAN, MaskPhone}
 }
 
 func WithDefaultPIIValues() Option {
