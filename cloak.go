@@ -386,6 +386,83 @@ func WithDefaultPII() Option {
 	}
 }
 
+// PCIKeys are the cardholder-data fields named by PCI DSS: the data that must never
+// reach a log, as distinct from the many fields that merely describe a transaction.
+var PCIKeys = []string{
+	"pan", "primaryaccountnumber", "cardnumber", "creditcardnumber",
+	"ccnumber", "accountnumber", "cardholdername", "expmonth", "expyear", "expirationdate",
+	"expiry", "cvv", "cvc", "cid", "csc", "cvv2", "securitycode", "cardsecuritycode",
+	"pin", "pinblock", "track1", "track2", "tracks", "servicecode", "cryptogram",
+	"emv", "chipdata", "magstripe", "signature",
+}
+
+// GDPRKeys are the personal-data categories of the GDPR, as attribute names.
+//
+// The regulation names categories rather than fields, so this list is necessarily a
+// guess about your schema. Treat it as a starting point and add your own: "name" is
+// absent on purpose, since masking every name would make the logs useless.
+var GDPRKeys = []string{
+	// Identity and contact
+	"email", "emailaddress", "contactemail", "phone", "phonenumber", "telephone",
+	"telephonenumber", "mobile", "mobilenumber", "address", "addressline", "streetaddress",
+	"postaladdress", "postcode", "zip", "zipcode", "postalcode", "cep", "geolocation",
+	"latitude", "longitude", "gps", "ipaddress", "ip",
+	// Government identifiers
+	"ssn", "socialsecuritynumber", "cpf", "cnpj", "document", "documentnumber", "taxid",
+	"nationalid", "nationalidentifier", "passport", "passportnumber", "driverlicense",
+	"driverslicense", "licensenumber", "birthdate", "dateofbirth", "dob",
+	// Financial
+	"bankaccount", "bankaccountnumber", "accountnumber", "iban", "routingnumber",
+	"sortcode", "swift", "creditcard", "cardnumber", "pan", "cvv", "cvc",
+	// Special categories, article 9
+	"health", "medical", "medicalrecord", "diagnosis", "prescription", "disability",
+	"genetic", "biometric", "biometricdata", "political", "politicalopinion",
+	"religion", "religious", "sexualorientation", "tradeunion", "unionmembership",
+}
+
+// WithPCI enables the cardholder-data fields PCI DSS forbids in logs, plus the PAN
+// detector so a card number is caught even under a field name you did not anticipate.
+//
+// It does not mask every field that mentions money — amounts, currencies and merchant
+// descriptors are not cardholder data, and masking them would cost you the transaction
+// history that makes a log useful.
+func WithPCI() Option {
+	return func(c *config) {
+		for _, k := range PCIKeys {
+			c.keys[normalizeKey(k)] = Redact
+		}
+		// PAN only: the other format detectors are not cardholder data and their
+		// false positives would cost more than they protect here.
+		c.values = append(c.values, MaskPAN)
+	}
+}
+
+// LGPDKeys is [GDPRKeys] under its Brazilian name. The two laws name the same
+// categories, so this is the same list rather than a parallel one that could drift.
+var LGPDKeys = GDPRKeys
+
+// WithLGPD is [WithGDPR] under its Brazilian name, for code that already speaks
+// LGPD.
+func WithLGPD() Option { return WithGDPR() }
+
+// WithGDPR enables the personal-data categories named by the GDPR.
+//
+// It is a starting point rather than a compliance claim: the regulation names
+// categories, and only your schema says which attribute holds each one. Review it, and
+// add whatever your domain calls something else.
+func WithGDPR() Option {
+	return func(c *config) {
+		for _, k := range GDPRKeys {
+			c.keys[normalizeKey(k)] = Redact
+		}
+		// In detector order, not a hand-written one: IPv4 before SSN, since a
+		// dotted-quad is nine digits and SSN would swallow it. MaskPhone is left
+		// out because the key list already covers phone fields and its heuristic
+		// would mask IDs and timestamps.
+		c.values = append(c.values, MaskEmail, MaskIPv4, MaskCPF, MaskCNPJ, MaskSSN)
+	}
+}
+
 func WithSkipValueScan(keys ...string) Option {
 	return func(c *config) {
 		for _, k := range keys {
