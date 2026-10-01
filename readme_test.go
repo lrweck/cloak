@@ -245,3 +245,97 @@ func TestReadmeMainExampleCompiles(t *testing.T) {
 		t.Fatalf("leak under the full preset: %s", out.String())
 	}
 }
+
+// The README claims a type rule masks a value wherever it appears.
+func TestReadmeWithType(t *testing.T) {
+	type Password string
+	type Login struct {
+		User     string
+		Password Password
+	}
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewJSONHandler(&b, nil),
+		cloak.WithType[Password]()))
+	logger.Info("login", slog.String("user", "jane"), slog.Any("password", Password("hunter2")))
+
+	got := b.String()
+	if strings.Contains(got, "hunter2") {
+		t.Fatalf("typed value leaked: %s", got)
+	}
+	if !strings.Contains(got, "jane") {
+		t.Fatalf("sibling must survive: %s", got)
+	}
+}
+
+// The README claims WithTag masks by struct tag.
+func TestReadmeWithTag(t *testing.T) {
+	type Account struct {
+		ID       int
+		Password string `cloak:"secret"`
+	}
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
+		cloak.WithStructScan(), cloak.WithTag("cloak", "secret", cloak.Redact)))
+	logger.Info("m", "a", Account{ID: 7, Password: "hunter2"})
+
+	got := b.String()
+	if strings.Contains(got, "hunter2") {
+		t.Fatalf("tagged field leaked: %s", got)
+	}
+}
+
+// The README claims WithContain masks a known secret anywhere, including a URL.
+func TestReadmeWithContain(t *testing.T) {
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
+		cloak.WithContain("sk_live_51H8xQ2")))
+	logger.Info("m", "request_url", "https://api.example.com/v1/sk_live_51H8xQ2/charge")
+
+	if strings.Contains(b.String(), "sk_live_51H8xQ2") {
+		t.Fatalf("secret leaked: %s", b.String())
+	}
+}
+
+// The README claims unexported fields do not reach a TextHandler.
+func TestReadmeUnexportedDropped(t *testing.T) {
+	type acct struct {
+		ID       int
+		password string
+	}
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), cloak.WithStructScan()))
+	logger.Info("m", "a", acct{ID: 7, password: "hunter2"})
+
+	got := b.String()
+	if strings.Contains(got, "hunter2") {
+		t.Fatalf("unexported field leaked: %s", got)
+	}
+	if !strings.Contains(got, "ID:7") {
+		t.Fatalf("exported field must survive: %s", got)
+	}
+}
+
+// The README claims each compliance preset does what it says, and no more.
+func TestReadmeCompliancePresets(t *testing.T) {
+	var b bytes.Buffer
+	pci := slog.New(cloak.New(slog.NewTextHandler(&b, nil), cloak.WithPCI()))
+	pci.Info("m", "pan", "4111111111111111", "amount", 1299)
+	got := b.String()
+	if strings.Contains(got, "4111111111111111") {
+		t.Errorf("PCI preset leaked a PAN: %s", got)
+	}
+	if !strings.Contains(got, "1299") {
+		t.Errorf("PCI preset must keep non-cardholder data: %s", got)
+	}
+
+	b.Reset()
+	gdpr := slog.New(cloak.New(slog.NewTextHandler(&b, nil), cloak.WithLGPD()))
+	gdpr.Info("m", "email", "john@example.com", "country", "Brazil")
+	got = b.String()
+	if strings.Contains(got, "john@example.com") {
+		t.Errorf("LGPD preset leaked an email: %s", got)
+	}
+	if !strings.Contains(got, "Brazil") {
+		t.Errorf("LGPD preset must keep country: %s", got)
+	}
+}

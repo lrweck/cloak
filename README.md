@@ -217,12 +217,25 @@ map keyed by a struct whose `LogValue()` returns something else — the containe
 to `[]any` or `map[string]any` rather than keeping the unmasked original.
 
 Nesting composes: `[]map[string][]User`, `map[string]map[string]User` and
-`map[User]any` all work, in any combination. Two consequences worth knowing:
+`map[User]any` all work, in any combination. Three consequences worth knowing:
 
 - Masking a map key can make two distinct keys equal, in which case their entries
   merge. That is inherent to masking keys; nothing leaks, but an entry can be lost.
 - A struct map key is fine on `TextHandler`, but `slog`'s `JSONHandler` rejects it
   outright — a Go limitation, present with or without cloak.
+- **Unexported fields and fields tagged `slog:"-"` are dropped**, not copied.
+  `encoding/json` ignores an unexported field, but `TextHandler` renders a struct with
+  `%+v` and prints them, so copying one through would hand it to the sink:
+
+  ```go
+  type acct struct{ ID int; password string }
+  slog.Info("m", "a", acct{ID: 7, password: "hunter2"})
+  // TextHandler: a="{ID:7 password:}"   <- the leak this avoids
+  ```
+
+  A struct carrying one of these fields always rebuilds, even when no rule matched,
+  because dropping the field is itself the change. A struct with only exported fields
+  still passes through untouched.
 
 ### LogValuer
 
@@ -247,10 +260,15 @@ never evaluates `LogValue()` again.
 | --- | --- |
 | `WithKey(mask, keys...)` | Mask whole-key matches |
 | `WithKeyContains(mask, keys...)` | Mask substring matches |
+| `WithType[T](maskers...)` | Mask values of Go type `T` |
+| `WithTag(key, value, mask)` | Mask struct fields carrying a tag |
+| `WithContain(secrets...)` | Mask any value containing a known secret |
 | `WithValueFunc(fn)` | Add a value detector |
 | `WithDefaultPII()` | Preset: keys plus detectors |
 | `WithDefaultPIIKeys()` | Preset: keys only, no value scanning |
 | `WithDefaultPIIValues()` | Preset: detectors only |
+| `WithPCI()` | Preset: cardholder data, per PCI DSS |
+| `WithGDPR()` / `WithLGPD()` | Preset: personal data, per GDPR / LGPD |
 | `WithSkipValueScan(keys...)` | Never scan these keys' values |
 | `WithMessageScan()` | Also scan the log message |
 | `WithStructScan()` | Walk `slog.Any` structs |
@@ -262,6 +280,84 @@ never evaluates `LogValue()` again.
 
 For custom detectors, order your own `WithValueFunc` list the same way: cheapest gate
 first, and put any loose heuristic last.
+
+### Masking by Go type
+
+The strongest rule, and the hardest to misuse. Define a type and it is masked wherever
+it appears:
+
+```go
+type EmailAddr string
+type Password  string
+
+cloak.WithType[EmailAddr]()
+cloak.WithType[Password](cloak.KeepLast(0))
+```
+
+```go
+type Login struct {
+    User     string
+    Password Password
+}
+slog.Info("login", "user", "jane", "password", Password("hunter2"))
+// password=[REDACTED]
+```
+
+The compiler rejects a type that does not exist, the value cannot be logged under a
+name nobody remembered to add to a preset, and there are no false positives: a
+`Password` is masked wherever it turns up and nothing else is.
+
+It also reaches what the value detectors cannot. `slog` stores a value of a named type
+as `KindAny`, not `KindString`, so `MaskEmail` and friends never see it. A type rule
+does, in attributes, struct fields, map values and slice elements alike.
+
+### Masking by struct tag
+
+A tag is the most durable way to mark a field, since renaming it does not lose the rule:
+
+```go
+type Account struct {
+    ID       int
+    Password string `cloak:"secret"`
+}
+
+cloak.WithTag("cloak", "secret", cloak.Redact)
+```
+
+The tag key is part of the rule, so rules for different namespaces coexist.
+
+### Masking a secret you already know
+
+For the case where you hold the secret but not the field it will turn up in:
+
+```go
+cloak.WithContain("sk_live_51H8xQ2")
+```
+
+A token spliced into a URL, an error quoting a response body, an auth header assembled
+by a client — none carry a field name worth matching, and no format detector knows what
+your token looks like. It applies to the message and to every attribute too, and the
+whole value is replaced rather than the substring, since the rest of it may carry more
+of the same secret.
+
+### Compliance presets
+
+```go
+cloak.New(next, cloak.WithPCI())
+cloak.New(next, cloak.WithGDPR())   // or WithLGPD()
+```
+
+`WithPCI` covers the cardholder data PCI DSS forbids in logs — PAN and aliases, CVV,
+expiry, cardholder name, track data, PIN — and keeps amounts, currencies and merchant
+names, which are not cardholder data and are most of what makes a transaction log worth
+reading.
+
+`WithGDPR` covers the personal-data categories including article 9: health, biometric,
+political, religious, sexual orientation, union membership. It deliberately leaves
+`name` alone, since masking every name would make the logs useless.
+
+Both are starting points, not compliance claims. `WithLGPD` is the Brazilian name for
+the same list, aliased rather than duplicated so the two cannot drift.
 
 Reflection runs only when a composite option is on. Without one, `reflect` is never
 called on the logging path.
