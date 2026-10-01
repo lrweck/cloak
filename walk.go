@@ -165,6 +165,19 @@ func (h *Handler) walkField(name string, v slog.Value, depth int) (slog.Value, b
 
 // walkStruct returns a masked copy of a struct, or the original when nothing matched.
 //
+// Fields that cannot be represented in the output are dropped rather than copied:
+// unexported fields, and fields tagged slog:"-". Unexported fields are the important
+// case. encoding/json ignores them, but slog's TextHandler renders a struct with "%+v",
+// which prints them, so copying one through would hand the value straight to the sink:
+//
+//	slog.Info("m", "a", struct{ pw string }{pw: "hunter2"})
+//	// TextHandler: a="{pw:hunter2}"   <- the leak this avoids
+//
+// reflect cannot write an unexported field either, so leaving it zero is the only
+// option that does not copy it — and it is what encoding/json would have produced
+// anyway. A struct carrying one of these fields therefore always rebuilds, even when no
+// rule matched, because the rebuild is the point.
+//
 // When a masked field no longer fits its declared type — which is what happens to a
 // [slog.LogValuer] field, since its LogValue returns a different type than the field
 // holds — the struct cannot be rebuilt in place. In that case the result is a
@@ -172,40 +185,35 @@ func (h *Handler) walkField(name string, v slog.Value, depth int) (slog.Value, b
 func (h *Handler) walkStruct(v reflect.Value, depth int) (any, bool) {
 	t := v.Type()
 	dst := reflect.New(t).Elem()
-	// Copy first, then overwrite only what changed. Unexported fields cannot be
-	// Set at all, and this way they keep their original value for free.
-	dst.Set(v)
 
-	changed := false
+	// dirty records that dst no longer equals v, which is not only about masking:
+	// a zeroed field is a change too.
+	dirty := false
 	shaped := true
 	attrs := make([]slog.Attr, 0, t.NumField())
 	for i := range t.NumField() {
 		f := t.Field(i)
-		// Unexported fields cannot be read through reflection, so they keep the
-		// value copied in above and are neither walked nor re-emitted.
-		if f.Tag.Get("slog") == "-" || !v.Field(i).CanInterface() {
+		if !dst.Field(i).CanSet() || f.Tag.Get("slog") == "-" {
+			dirty = true
 			continue
 		}
 		out, c := h.walkField(f.Name, slog.AnyValue(v.Field(i).Interface()), depth+1)
 		if !c {
+			dst.Field(i).Set(v.Field(i))
 			if shaped {
 				attrs = append(attrs, slog.Any(f.Name, v.Field(i).Interface()))
 			}
 			continue
 		}
-		changed = true
+		dirty = true
 		attrs = append(attrs, slog.Any(f.Name, out))
-		if !dst.Field(i).CanSet() {
-			shaped = false
-			continue
-		}
-		if cv := convert(out, f.Type); cv.IsValid() && cv.Type() == f.Type {
+		if cv := convert(out, f.Type); cv.IsValid() {
 			dst.Field(i).Set(cv)
 		} else {
 			shaped = false
 		}
 	}
-	if !changed {
+	if !dirty {
 		return v.Interface(), false
 	}
 	if !shaped {

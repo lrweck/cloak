@@ -140,28 +140,70 @@ func TestByteSliceUntouched(t *testing.T) {
 	}
 }
 
-func TestUnexportedFieldsSurvive(t *testing.T) {
+// TextHandler renders a struct with %+v, which prints unexported fields that
+// encoding/json would ignore. Copying them through hands the value to the sink.
+func TestUnexportedFieldsAreDropped(t *testing.T) {
 	type withUnexported struct {
 		Public string
 		secret string
 	}
-	got := logWith(compositeOpts(cloak.WithStructScan()), func(l *slog.Logger) {
-		l.Info("m", "v", withUnexported{Public: "john@example.com", secret: "keep"})
-	})
-	if strings.Contains(got, "john@example.com") {
-		t.Errorf("exported field leaked: %s", got)
-	}
-	if !strings.Contains(got, "keep") {
-		t.Errorf("unexported field must be copied verbatim: %s", got)
+	for _, h := range []struct {
+		name  string
+		build func(*bytes.Buffer) slog.Handler
+	}{
+		{"TextHandler", func(b *bytes.Buffer) slog.Handler { return slog.NewTextHandler(b, nil) }},
+		{"JSONHandler", func(b *bytes.Buffer) slog.Handler { return slog.NewJSONHandler(b, nil) }},
+	} {
+		t.Run(h.name, func(t *testing.T) {
+			var b bytes.Buffer
+			logger := slog.New(cloak.New(h.build(&b), compositeOpts(cloak.WithStructScan())...))
+			logger.Info("m", "v", withUnexported{Public: "public-value", secret: "hunter2"})
+
+			got := b.String()
+			if strings.Contains(got, "hunter2") {
+				t.Errorf("unexported field leaked: %s", got)
+			}
+			if !strings.Contains(got, "public-value") {
+				t.Errorf("exported field must survive: %s", got)
+			}
+		})
 	}
 }
 
-func TestSlogDashTagSkipped(t *testing.T) {
+// A struct carrying an unexported field rebuilds even when no rule matched, because
+// dropping the field is the change.
+func TestUnexportedFieldForcesRebuild(t *testing.T) {
+	type quiet struct{ secret string }
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), cloak.WithStructScan()))
+	logger.Info("m", "v", quiet{secret: "hunter2"})
+
+	if strings.Contains(b.String(), "hunter2") {
+		t.Fatalf("leaked: %s", b.String())
+	}
+}
+
+// A struct with no unexported fields and no match is passed through untouched.
+func TestCleanStructPassesThrough(t *testing.T) {
+	type clean struct{ A, B int }
 	got := logWith(compositeOpts(cloak.WithStructScan()), func(l *slog.Logger) {
-		l.Info("m", "acct", account{Skip: "john@example.com"})
+		l.Info("m", "v", clean{A: 1, B: 2})
 	})
-	if !strings.Contains(got, "john@example.com") {
-		t.Errorf(`slog:"-" must be skipped: %s`, got)
+	if !strings.Contains(got, "A:1") || !strings.Contains(got, "B:2") {
+		t.Fatalf("unexpected: %s", got)
+	}
+}
+
+// A field tagged slog:"-" is omitted from the output rather than copied.
+func TestSlogDashTagDropped(t *testing.T) {
+	got := logWith(compositeOpts(cloak.WithStructScan()), func(l *slog.Logger) {
+		l.Info("m", "acct", account{ID: 7, Skip: "hunter2"})
+	})
+	if strings.Contains(got, "hunter2") {
+		t.Errorf(`slog:"-" must not be emitted: %s`, got)
+	}
+	if !strings.Contains(got, "ID:7") {
+		t.Errorf("siblings must survive: %s", got)
 	}
 }
 
