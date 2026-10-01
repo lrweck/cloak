@@ -87,3 +87,22 @@ func TestPointerIsWalkedByEveryOption(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkTypeLookupConfigured(b *testing.B) {
+	c := newConfigForBench()
+	WithType[struct{ A int }]()(c)
+	v := slog.AnyValue(struct{ A int }{A: 1})
+	b.ReportAllocs()
+	for b.Loop() {
+		c.maskerForType(v)
+	}
+}
+
+func BenchmarkTypeLookupUnconfigured(b *testing.B) {
+	c := newConfigForBench()
+	v := slog.AnyValue(struct{ A int }{A: 1})
+	b.ReportAllocs()
+	for b.Loop() {
+		c.maskerForType(v)
+	}
+}

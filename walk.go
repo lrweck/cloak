@@ -69,6 +69,13 @@ func (h *Handler) walk(x any, depth int) (any, bool) {
 	if lv, ok := x.(slog.LogValuer); ok {
 		return h.walkValue(lv.LogValue().Resolve(), depth+1)
 	}
+	// A type rule before the reflect switch, so a named type is caught wherever it
+	// sits: a slice element, a map value, anything reach() descends into.
+	if len(h.cfg.typeMasks) > 0 {
+		if m, ok := h.cfg.typeMasks[reflect.TypeOf(x)]; ok {
+			return m(slog.AnyValue(x)), true
+		}
+	}
 
 	v := reflect.ValueOf(x)
 	switch v.Kind() {
@@ -153,6 +160,9 @@ func (h *Handler) walkField(name, tag string, v slog.Value, depth int) (slog.Val
 		return m(v.Resolve()), true
 	}
 	if m, ok := h.cfg.maskerForTag(tag); ok {
+		return m(v.Resolve()), true
+	}
+	if m, ok := h.cfg.maskerForType(v); ok {
 		return m(v.Resolve()), true
 	}
 	if _, skip := h.cfg.skip[normalizeKey(name)]; skip {

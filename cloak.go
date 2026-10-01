@@ -90,11 +90,64 @@ type config struct {
 	// tagMasks match a struct field by tag, which survives a rename in a way a
 	// field name does not.
 	tagMasks []tagMask
+	// typeMasks match a value by its Go type, which is decided at compile time by
+	// the type itself rather than by a name someone has to remember.
+	typeMasks map[reflect.Type]Masker
 }
 
 type tagMask struct {
 	key, value string
 	masker     Masker
+}
+
+// WithType masks every value whose Go type is exactly T.
+//
+//	type EmailAddr string
+//	type Password string
+//
+//	cloak.WithType[EmailAddr](), cloak.WithType[Password](cloak.KeepLast(0))
+//
+// This is the strongest rule available and the cheapest to use correctly. The
+// compiler refuses to pass a type that does not exist, the value cannot be logged
+// under a name you forgot to add to a preset, and there are no false positives: a
+// Password is masked wherever it is, and nothing else is.
+//
+// It applies wherever the value appears: as an attribute, a struct field, a map
+// value or a slice element. Values of a named type are not KindString to slog, so
+// this also reaches types the value detectors cannot see.
+//
+// With no masker, the value is fully redacted.
+//
+// Precedence: an explicit key rule wins over a type rule, and a type rule wins over
+// the value detectors.
+func WithType[T any](maskers ...Masker) Option {
+	m := Redact
+	if len(maskers) > 0 && maskers[0] != nil {
+		m = maskers[0]
+	}
+	t := reflect.TypeFor[T]()
+	return func(c *config) {
+		if c.typeMasks == nil {
+			c.typeMasks = make(map[reflect.Type]Masker)
+		}
+		c.typeMasks[t] = m
+	}
+}
+
+// maskerForType returns the rule matching a value's exact Go type, if any.
+func (c *config) maskerForType(v slog.Value) (Masker, bool) {
+	if len(c.typeMasks) == 0 {
+		return nil, false
+	}
+	// A LogValuer must be resolved first: its type is not what gets logged.
+	if v.Kind() == slog.KindLogValuer {
+		v = v.Resolve()
+	}
+	if v.Kind() != slog.KindAny {
+		return nil, false
+	}
+	m, ok := c.typeMasks[reflect.TypeOf(v.Any())]
+	return m, ok
 }
 
 // WithTag masks a struct field carrying the given struct tag.
@@ -432,6 +485,9 @@ func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 	v := a.Value.Resolve()
 	key := normalizeKey(a.Key)
 	if m, ok := h.cfg.maskerFor(key); ok {
+		return slog.Attr{Key: a.Key, Value: m(v)}, true
+	}
+	if m, ok := h.cfg.maskerForType(v); ok {
 		return slog.Attr{Key: a.Key, Value: m(v)}, true
 	}
 	switch v.Kind() {
