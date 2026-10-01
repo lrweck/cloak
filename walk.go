@@ -216,6 +216,12 @@ func (h *Handler) walkStruct(v reflect.Value, depth int) (any, bool) {
 
 // walkMap masks both keys and values, so "email" -> "john@example.com" is caught by
 // key and a bare address used as a value is caught by the detectors.
+//
+// When a masked key cannot be represented in the map's key type the whole map widens
+// to map[string]any. The alternative — keeping the original key — would leak, and
+// stringifying the key in place is not an option either: a map panics on a
+// non-assignable key, and two masked keys that print alike would collide and silently
+// drop an entry.
 func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 	if v.IsNil() {
 		return v.Interface(), false
@@ -232,11 +238,11 @@ func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 		kv := key
 		if kc {
 			changed = true
-			if cv := convert(maskedKey, v.Type().Key()); cv.IsValid() {
+			cv := convert(maskedKey, v.Type().Key())
+			if cv.IsValid() {
 				kv = cv
 			} else {
 				shaped = false
-				kv = reflect.ValueOf(fmt.Sprint(maskedKey))
 			}
 		}
 		vv := value
@@ -248,8 +254,16 @@ func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 				shaped = false
 			}
 		}
-		dst.SetMapIndex(kv, vv)
-		wide[fmt.Sprint(kv.Interface())] = loose(maskedValue, vc, vv.Interface())
+		// A key that could not be represented keeps the original only where the
+		// map is already widening; there it is rendered rather than leaked.
+		if shaped || !kc {
+			dst.SetMapIndex(kv, vv)
+		}
+		if kc {
+			wide[fmt.Sprint(maskedKey)] = loose(maskedValue, vc, vv.Interface())
+		} else {
+			wide[key.String()] = loose(maskedValue, vc, vv.Interface())
+		}
 	}
 	if !changed {
 		return v.Interface(), false

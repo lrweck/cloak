@@ -191,9 +191,17 @@ How it works:
 - Nesting recurses, through pointers, slices of slices, and maps of structs.
 - Walking stops at 32 levels, so a self-referential structure cannot hang the logger.
 
-When a masked value cannot be represented in its original type — a `[]LogValuer`, where
-the element type cannot hold the masked string — the container widens to `[]any` or
-`map[string]any` rather than keeping the unmasked original.
+When a masked value cannot be represented in its original type — a `[]LogValuer`, or a
+map keyed by a struct whose `LogValue()` returns something else — the container widens
+to `[]any` or `map[string]any` rather than keeping the unmasked original.
+
+Nesting composes: `[]map[string][]User`, `map[string]map[string]User` and
+`map[User]any` all work, in any combination. Two consequences worth knowing:
+
+- Masking a map key can make two distinct keys equal, in which case their entries
+  merge. That is inherent to masking keys; nothing leaks, but an entry can be lost.
+- A struct map key is fine on `TextHandler`, but `slog`'s `JSONHandler` rejects it
+  outright — a Go limitation, present with or without cloak.
 
 ### LogValuer
 
