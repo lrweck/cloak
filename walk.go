@@ -116,7 +116,7 @@ func (h *Handler) walkValue(v slog.Value, depth int) (any, bool) {
 		dst := make([]slog.Attr, len(src))
 		changed := false
 		for i, ga := range src {
-			out, c := h.walkField(ga.Key, ga.Value, depth+1)
+			out, c := h.walkField(ga.Key, "", ga.Value, depth+1)
 			dst[i] = slog.Attr{Key: ga.Key, Value: out}
 			changed = changed || c
 		}
@@ -145,8 +145,14 @@ func (h *Handler) walkValue(v slog.Value, depth int) (any, bool) {
 
 // walkField applies key rules before walking, so a field named "password" is masked
 // as a whole instead of scanned for values it happens to contain.
-func (h *Handler) walkField(name string, v slog.Value, depth int) (slog.Value, bool) {
+//
+// tag is the field's struct tag value under the configured tag key, empty when the
+// field carries none.
+func (h *Handler) walkField(name, tag string, v slog.Value, depth int) (slog.Value, bool) {
 	if m, ok := h.cfg.maskerFor(normalizeKey(name)); ok {
+		return m(v.Resolve()), true
+	}
+	if m, ok := h.cfg.maskerForTag(tag); ok {
 		return m(v.Resolve()), true
 	}
 	if _, skip := h.cfg.skip[normalizeKey(name)]; skip {
@@ -197,7 +203,7 @@ func (h *Handler) walkStruct(v reflect.Value, depth int) (any, bool) {
 			dirty = true
 			continue
 		}
-		out, c := h.walkField(f.Name, slog.AnyValue(v.Field(i).Interface()), depth+1)
+		out, c := h.walkField(f.Name, h.cfg.tagValue(f), slog.AnyValue(v.Field(i).Interface()), depth+1)
 		if !c {
 			dst.Field(i).Set(v.Field(i))
 			if shaped {

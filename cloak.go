@@ -9,8 +9,8 @@ package cloak
 
 import (
 	"context"
-
 	"log/slog"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 )
@@ -87,6 +87,59 @@ type config struct {
 	scan composite
 	// ctxPulls produce attributes from the context, masked like any others.
 	ctxPulls []func(context.Context) []slog.Attr
+	// tagMasks match a struct field by tag, which survives a rename in a way a
+	// field name does not.
+	tagMasks []tagMask
+}
+
+type tagMask struct {
+	key, value string
+	masker     Masker
+}
+
+// WithTag masks a struct field carrying the given struct tag.
+//
+//	type Account struct {
+//	    ID       int
+//	    Password string `cloak:"secret"`
+//	}
+//
+//	cloak.WithTag("cloak", "secret", cloak.Redact)
+//
+// A tag is the most durable way to mark a field: renaming the field does not lose the
+// rule, and the intent sits on the field rather than in the logger's configuration.
+//
+// Rules for different tag keys can coexist, since the key is part of each rule. A field
+// matching no rule is walked normally.
+func WithTag(key, value string, m Masker) Option {
+	return func(c *config) {
+		c.tagMasks = append(c.tagMasks, tagMask{key: key, value: value, masker: m})
+	}
+}
+
+// maskerForTag returns the rule matching a field's tag value, if any.
+func (c *config) maskerForTag(tag string) (Masker, bool) {
+	if tag == "" {
+		return nil, false
+	}
+	for _, t := range c.tagMasks {
+		if t.value == tag {
+			return t.masker, true
+		}
+	}
+	return nil, false
+}
+
+// tagValue reads the tag on a struct field that any rule is watching. It scans the
+// configured keys in order and returns the first hit, so a field carrying several of
+// them resolves predictably.
+func (c *config) tagValue(f reflect.StructField) string {
+	for _, t := range c.tagMasks {
+		if v := f.Tag.Get(t.key); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // WithContextAttrs registers functions that pull values out of the context and copy
