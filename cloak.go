@@ -11,13 +11,17 @@ import (
 	"context"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
 
+// Placeholder is the value substituted by [Redact] and by [WithContain].
+const Placeholder = "[REDACTED]"
+
 type Masker func(slog.Value) slog.Value
 
-func Redact(slog.Value) slog.Value { return slog.StringValue("[REDACTED]") }
+func Redact(slog.Value) slog.Value { return slog.StringValue(Placeholder) }
 
 func Fixed(marker string) Masker {
 	return func(slog.Value) slog.Value { return slog.StringValue(marker) }
@@ -148,6 +152,47 @@ func (c *config) maskerForType(v slog.Value) (Masker, bool) {
 	}
 	m, ok := c.typeMasks[reflect.TypeOf(v.Any())]
 	return m, ok
+}
+
+// WithContain masks any value that contains one of the given strings, wherever it
+// appears.
+//
+//	cloak.WithContain("s3cr3t-token")
+//
+// It solves the problem the other rules cannot: you know the secret but not where it
+// will be logged. A token spliced into a URL, an error message quoting a response
+// body, an auth header assembled by a client — none of those carry a field name worth
+// matching, and the value detectors have no idea what your token looks like.
+//
+// It is a value rule, so it applies to the message, to attribute values, and
+// everywhere the composite walk descends. Matching is case sensitive, since a secret
+// is a specific byte sequence. The whole value is replaced rather than the substring,
+// because the rest of the value may be sensitive too.
+//
+// Empty secrets are ignored: an empty needle matches everything, which would silence
+// every log line.
+func WithContain(secrets ...string) Option {
+	return func(c *config) {
+		needles := make([]string, 0, len(secrets))
+		for _, s := range secrets {
+			if s != "" {
+				needles = append(needles, s)
+			}
+		}
+		if len(needles) == 0 {
+			return
+		}
+		// Ahead of the format detectors: a known secret is a more certain match than
+		// anything inferred from the shape of the value.
+		c.values = slices.Insert(c.values, 0, func(s string) (string, bool) {
+			for _, needle := range needles {
+				if strings.Contains(s, needle) {
+					return Placeholder, true
+				}
+			}
+			return s, false
+		})
+	}
 }
 
 // WithTag masks a struct field carrying the given struct tag.
