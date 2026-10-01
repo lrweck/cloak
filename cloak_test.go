@@ -244,32 +244,6 @@ func TestMessageNotScannedByDefault(t *testing.T) {
 	}
 }
 
-type customer struct {
-	Email string `json:"email"`
-	CPF   string `json:"cpf"`
-}
-
-func TestWithAnyScan(t *testing.T) {
-	var b bytes.Buffer
-	logger := slog.New(New(slog.NewTextHandler(&b, nil), WithDefaultPIIValues(), WithAnyScan()))
-	logger.Info("test", "customer", customer{Email: "john@example.com", CPF: "529.982.247-25"})
-	got := b.String()
-	for _, leaked := range []string{"john@example.com", "529.982.247"} {
-		if strings.Contains(got, leaked) {
-			t.Errorf("leaked %q: %s", leaked, got)
-		}
-	}
-}
-
-func TestAnyNotScannedByDefault(t *testing.T) {
-	var b bytes.Buffer
-	logger := slog.New(New(slog.NewTextHandler(&b, nil), WithDefaultPIIValues()))
-	logger.Info("test", "customer", customer{Email: "john@example.com"})
-	if !strings.Contains(b.String(), "john@example.com") {
-		t.Fatal("slog.Any should be untouched without WithAnyScan")
-	}
-}
-
 func TestNilNextIsInert(t *testing.T) {
 	logger := slog.New(New(nil, WithDefaultPII()))
 	logger.Info("test", "password", "hunter2")

@@ -152,10 +152,65 @@ slog.Group("user",
 // user.id=7 user.email=[REDACTED] user.name=Jane
 ```
 
+### Structs, maps and slices
+
+`slog.Any` hands the handler one opaque value, so a struct's fields, a map's entries
+and a slice's elements are never reached by attribute rules. `%+v` does not save you:
+it renders `[]*User` as `[0xc000...]` addresses, printing no PII but also masking
+nothing.
+
+Reflection fixes that. One option per shape, plus a combined one:
+
+```go
+handler := cloak.New(next,
+    cloak.WithDefaultPII(),
+    cloak.WithStructScan(),   // slog.Any("user", User{Email: ...})
+    cloak.WithMapScan(),      // slog.Any("ctx", map[string]any{"email": ...})
+    cloak.WithSliceScan(),    // slog.Any("emails", []string{...})
+)
+
+// Or all three at once:
+handler := cloak.New(next, cloak.WithDefaultPII(), cloak.WithCompositeScan())
+```
+
+Each option is scoped to its shape, so `WithStructScan()` leaves slices alone. Every
+option also follows pointers, since passing a struct by pointer is the common case.
+
+How it works:
+
+- The value keeps its type. Only the offending fields change, so the record still logs
+  a structured object rather than a stringified blob.
+- Fields are matched by name first (`Email` hits an `email` rule), then by value. A key
+  rule always wins over a detector.
+- A copy is built only when something changed, so untouched values pass through by
+  identity with no allocation.
+- `[]byte` is deliberately skipped: it is data, not a container of things to log, and
+  walking it would rewrite a payload into decimal digits.
+- `slog:"-"` fields are skipped. Unexported fields keep their original value, since
+  reflection cannot write them.
+- Nesting recurses, through pointers, slices of slices, and maps of structs.
+- Walking stops at 32 levels, so a self-referential structure cannot hang the logger.
+
+When a masked value cannot be represented in its original type — a `[]LogValuer`, where
+the element type cannot hold the masked string — the container widens to `[]any` or
+`map[string]any` rather than keeping the unmasked original.
+
 ### LogValuer
 
-A `LogValue()` result is resolved once and inspected as a value, so a `LogValuer` is
-never re-evaluated by the wrapped handler.
+`slog.LogValuer` takes precedence, because a value that knows how to log itself has
+already decided what it exposes. Cloak resolves it first, then masks what came out:
+
+```go
+type Email string
+func (Email) LogValue() slog.Value { return slog.StringValue("john@example.com") }
+
+// with WithDefaultPIIValues() enabled:
+slog.Info("m", "mail", Email("x"))   // cloak logs mail=j***@example.com
+```
+
+Without this, masking would look at the struct behind `LogValue()` and miss the string
+the author actually meant to emit. The result is resolved once, so the wrapped handler
+never evaluates `LogValue()` again.
 
 ### Options
 
@@ -169,33 +224,29 @@ never re-evaluated by the wrapped handler.
 | `WithDefaultPIIValues()` | Preset: detectors only |
 | `WithSkipValueScan(keys...)` | Never scan these keys' values |
 | `WithMessageScan()` | Also scan the log message |
-| `WithAnyScan()` | Also scan `slog.Any` values |
+| `WithStructScan()` | Walk `slog.Any` structs |
+| `WithMapScan()` | Walk `slog.Any` maps |
+| `WithSliceScan()` | Walk `slog.Any` slices |
+| `WithCompositeScan()` | All three composite options |
 | `New(nil, ...)` | Discard everything; useful in tests |
 
-### Two gaps worth knowing about
+Reflection runs only when a composite option is on. Without one, `reflect` is never
+called on the logging path.
 
-`slog.Info` has two places a value can hide that attribute rules do not reach by
-default, so both are opt-in.
+### The message
 
-**The message.** Nothing marks it as data, and `slog.Info("user " + email)` is
-routine. `WithMessageScan()` runs the detectors over it.
-
-**`slog.Any` with a struct.** A struct is one opaque value, so its fields are never
-inspected and `%+v` prints them all. `WithAnyScan()` renders it the way the wrapped
-handler would and scans the result, at the cost of turning that attribute into a
-masked string.
+The message is free text that nothing marks as data, and `slog.Info("user " + email)`
+is routine. `WithMessageScan()` runs the detectors over it:
 
 ```go
 handler := cloak.New(next,
     cloak.WithDefaultPII(),
     cloak.WithMessageScan(),
-    cloak.WithAnyScan(),
 )
 ```
 
-Both are off by default on purpose: they rewrite text nobody asked to rewrite, and a
-caller who knows a field is sensitive should name it with `WithKey` instead. Turn them
-on when the leak matters more than the log's readability.
+It is off by default because it rewrites text nobody asked to rewrite. Turn it on when
+the leak matters more than the log's readability.
 
 ### Skipping
 
@@ -229,13 +280,25 @@ timestamps.
 Cloak adds ~30ns and no allocations to a record with no PII:
 
 ```
-BenchmarkLog/passthrough-20          820.6 ns/op    320 B/op    6 allocs/op
-BenchmarkLog/default_pii-20          843.4 ns/op    320 B/op    6 allocs/op
+BenchmarkLog/passthrough-20          810.1 ns/op    320 B/op    6 allocs/op
+BenchmarkLog/default_pii-20          836.1 ns/op    320 B/op    6 allocs/op
 BenchmarkLogWithPII/default_pii-20  1139 ns/op     392 B/op   11 allocs/op
 ```
 
 Key lookup is a single map hit (~8ns). The cost shows up only when a value detector
 actually fires and a new record has to be built.
+
+Turning on a composite option costs nothing when the logged shape does not match it,
+because the kind is checked first:
+
+```
+BenchmarkCompositeScan/disabled-20    1015 ns/op    104 B/op    3 allocs/op
+BenchmarkCompositeScan/map-20          958 ns/op    104 B/op    3 allocs/op
+BenchmarkCompositeScan/slice-20       1001 ns/op    104 B/op    3 allocs/op
+BenchmarkCompositeScan/struct-20      1634 ns/op    513 B/op   17 allocs/op
+```
+
+The struct case is the expensive one, since it rebuilds the value through reflection.
 
 ## Testing
 

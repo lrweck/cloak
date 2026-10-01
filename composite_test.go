@@ -1,0 +1,323 @@
+package cloak_test
+
+import (
+	"bytes"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/lrweck/cloak"
+)
+
+type account struct {
+	ID      int
+	Email   string
+	CPF     string
+	Tags    []string
+	Inner   *account
+	Skip    string `slog:"-"`
+	Contact string
+}
+
+func logWith(opts []cloak.Option, fn func(*slog.Logger)) string {
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
+	fn(logger)
+	return b.String()
+}
+
+func compositeOpts(extra ...cloak.Option) []cloak.Option {
+	return append([]cloak.Option{
+		cloak.WithDefaultPIIKeys(),
+		cloak.WithDefaultPIIValues(),
+	}, extra...)
+}
+
+func TestWithStructScan(t *testing.T) {
+	got := logWith(compositeOpts(cloak.WithStructScan()), func(l *slog.Logger) {
+		l.Info("m", "acct", account{ID: 7, Email: "john@example.com", CPF: "529.982.247-25"})
+	})
+	for _, leaked := range []string{"john@example.com", "529.982.247"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("leaked %q: %s", leaked, got)
+		}
+	}
+	// TextHandler renders a struct with %+v, so the sibling field is "ID:7".
+	if !strings.Contains(got, "ID:7") {
+		t.Errorf("struct must keep its other fields: %s", got)
+	}
+}
+
+func TestPointerToStructAtTopLevel(t *testing.T) {
+	// Passing a struct by pointer is the common case, and compositePtr is set by
+	// every option so it must be walked too.
+	got := logWith(compositeOpts(cloak.WithStructScan()), func(l *slog.Logger) {
+		l.Info("m", "acct", &account{ID: 7, Email: "john@example.com"})
+	})
+	if strings.Contains(got, "john@example.com") {
+		t.Errorf("leaked: %s", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Errorf("expected masking: %s", got)
+	}
+}
+
+func TestStructScanKeepsType(t *testing.T) {
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewJSONHandler(&b, nil),
+		cloak.WithDefaultPIIValues(), cloak.WithStructScan()))
+	logger.Info("m", "acct", account{ID: 7, Email: "john@example.com"})
+
+	// A masked struct is still an object in JSON, not a stringified blob.
+	if !strings.Contains(b.String(), `"acct":{"ID":7,"Email":"j***@example.com"`) {
+		t.Fatalf("struct should keep its shape: %s", b.String())
+	}
+}
+
+func TestWithMapScan(t *testing.T) {
+	got := logWith(compositeOpts(cloak.WithMapScan()), func(l *slog.Logger) {
+		l.Info("m", "ctx", map[string]any{
+			"email": "john@example.com",
+			"role":  "admin",
+			"cpf":   "529.982.247-25",
+		})
+	})
+	for _, leaked := range []string{"john@example.com", "529.982.247"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("leaked %q: %s", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "role") || !strings.Contains(got, "admin") {
+		t.Errorf("map must keep unrelated entries: %s", got)
+	}
+}
+
+func TestWithSliceScan(t *testing.T) {
+	got := logWith(compositeOpts(cloak.WithSliceScan()), func(l *slog.Logger) {
+		l.Info("m", "emails", []string{"a@example.com", "b@example.com"})
+	})
+	if strings.Contains(got, "@example.com\"") || strings.Contains(got, "a@example.com,") {
+		t.Errorf("leaked: %s", got)
+	}
+	if !strings.Contains(got, "a***@example.com") {
+		t.Errorf("expected masking: %s", got)
+	}
+}
+
+func TestSliceOfPointers(t *testing.T) {
+	// slog renders a pointer slice as [0x...] addresses, so the leak check needs
+	// the JSON handler, which dereferences.
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewJSONHandler(&b, nil), compositeOpts(cloak.WithSliceScan())...))
+	logger.Info("m", "users", []*account{{ID: 1, Email: "john@example.com"}})
+
+	got := b.String()
+	if strings.Contains(got, "john@example.com") {
+		t.Errorf("leaked through pointer slice: %s", got)
+	}
+	if !strings.Contains(got, `"ID":1`) {
+		t.Errorf("expected the element to survive: %s", got)
+	}
+}
+
+func TestNestedStructs(t *testing.T) {
+	got := logWith(compositeOpts(cloak.WithStructScan()), func(l *slog.Logger) {
+		l.Info("m", "acct", account{Inner: &account{ID: 2, Email: "inner@example.com"}})
+	})
+	if strings.Contains(got, "inner@example.com") {
+		t.Errorf("leaked from nested pointer: %s", got)
+	}
+}
+
+func TestByteSliceUntouched(t *testing.T) {
+	// Walking []byte would rewrite a payload into decimal digits.
+	payload := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	got := logWith(compositeOpts(cloak.WithCompositeScan()), func(l *slog.Logger) {
+		l.Info("m", "raw", payload)
+	})
+	if strings.Contains(got, "*") {
+		t.Errorf("[]byte must not be walked: %s", got)
+	}
+}
+
+func TestUnexportedFieldsSurvive(t *testing.T) {
+	type withUnexported struct {
+		Public string
+		secret string
+	}
+	got := logWith(compositeOpts(cloak.WithStructScan()), func(l *slog.Logger) {
+		l.Info("m", "v", withUnexported{Public: "john@example.com", secret: "keep"})
+	})
+	if strings.Contains(got, "john@example.com") {
+		t.Errorf("exported field leaked: %s", got)
+	}
+	if !strings.Contains(got, "keep") {
+		t.Errorf("unexported field must be copied verbatim: %s", got)
+	}
+}
+
+func TestSlogDashTagSkipped(t *testing.T) {
+	got := logWith(compositeOpts(cloak.WithStructScan()), func(l *slog.Logger) {
+		l.Info("m", "acct", account{Skip: "john@example.com"})
+	})
+	if !strings.Contains(got, "john@example.com") {
+		t.Errorf(`slog:"-" must be skipped: %s`, got)
+	}
+}
+
+func TestOptionsAreIndependent(t *testing.T) {
+	cases := []struct {
+		name   string
+		opts   []cloak.Option
+		attr   slog.Attr
+		leaked string
+		masked string
+	}{
+		{
+			name:   "struct only does not touch slices",
+			opts:   compositeOpts(cloak.WithStructScan()),
+			attr:   slog.Any("v", []string{"a@example.com"}),
+			leaked: "a@example.com",
+		},
+		{
+			name:   "slice only does not touch structs",
+			opts:   compositeOpts(cloak.WithSliceScan()),
+			attr:   slog.Any("v", account{Email: "a@example.com"}),
+			leaked: "a@example.com",
+		},
+		{
+			name:   "map only does not touch slices",
+			opts:   compositeOpts(cloak.WithMapScan()),
+			attr:   slog.Any("v", []string{"a@example.com"}),
+			leaked: "a@example.com",
+		},
+		{
+			name:   "composite covers slices",
+			opts:   compositeOpts(cloak.WithCompositeScan()),
+			attr:   slog.Any("v", []string{"a@example.com"}),
+			masked: "a***@example.com",
+		},
+		{
+			name:   "composite covers structs",
+			opts:   compositeOpts(cloak.WithCompositeScan()),
+			attr:   slog.Any("v", account{Contact: "a@example.com"}),
+			masked: "a***@example.com",
+		},
+		{
+			name:   "composite covers maps",
+			opts:   compositeOpts(cloak.WithCompositeScan()),
+			attr:   slog.Any("v", map[string]any{"mail": "a@example.com"}),
+			masked: "a***@example.com",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := logWith(tc.opts, func(l *slog.Logger) { l.Info("m", tc.attr) })
+			if tc.leaked != "" && !strings.Contains(got, tc.leaked) {
+				t.Fatalf("expected %q to survive: %s", tc.leaked, got)
+			}
+			if tc.masked != "" && !strings.Contains(got, tc.masked) {
+				t.Fatalf("expected %q to be masked: %s", tc.masked, got)
+			}
+		})
+	}
+}
+
+// slog.LogValuer takes precedence over masking: it decides what the value exposes,
+// and that output is then masked.
+type resolved struct{ raw string }
+
+func (r resolved) LogValue() slog.Value { return slog.StringValue(r.raw) }
+
+func TestLogValuerTakesPrecedenceThenMasked(t *testing.T) {
+	cases := []struct {
+		name   string
+		opts   []cloak.Option
+		attr   slog.Attr
+		masked string
+		leaked string
+	}{
+		{
+			name:   "top level",
+			opts:   compositeOpts(cloak.WithCompositeScan()),
+			attr:   slog.Any("v", resolved{raw: "john@example.com"}),
+			masked: "j***@example.com",
+		},
+		{
+			name:   "struct field",
+			opts:   compositeOpts(cloak.WithStructScan()),
+			attr:   slog.Any("v", struct{ Contact resolved }{Contact: resolved{raw: "john@example.com"}}),
+			masked: "j***@example.com",
+		},
+		{
+			// "email" is a default key, so the key rule wins over the detector.
+			name:   "struct field, key rule beats value detector",
+			opts:   compositeOpts(cloak.WithStructScan()),
+			attr:   slog.Any("v", struct{ Email resolved }{Email: resolved{raw: "john@example.com"}}),
+			masked: "[REDACTED]",
+		},
+		{
+			name:   "map value",
+			opts:   compositeOpts(cloak.WithMapScan()),
+			attr:   slog.Any("v", map[string]any{"mail": resolved{raw: "john@example.com"}}),
+			masked: "j***@example.com",
+		},
+		{
+			name:   "slice element",
+			opts:   compositeOpts(cloak.WithSliceScan()),
+			attr:   slog.Any("v", []resolved{{raw: "john@example.com"}}),
+			masked: "j***@example.com",
+		},
+		{
+			name:   "LogValue returning a group",
+			opts:   compositeOpts(cloak.WithCompositeScan()),
+			attr:   slog.Any("v", groupValuer{}),
+			masked: "[REDACTED]",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := logWith(tc.opts, func(l *slog.Logger) { l.Info("m", tc.attr) })
+			if tc.leaked != "" && strings.Contains(got, tc.leaked) {
+				t.Fatalf("leaked %q: %s", tc.leaked, got)
+			}
+			if !strings.Contains(got, tc.masked) {
+				t.Fatalf("expected %q: %s", tc.masked, got)
+			}
+			if strings.Contains(got, "john@example.com") {
+				t.Fatalf("LogValue output was not masked: %s", got)
+			}
+		})
+	}
+}
+
+type groupValuer struct{}
+
+func (groupValuer) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("mail", "john@example.com"),
+		slog.Int("id", 7),
+	)
+}
+
+func TestLogValuerGroupKeepsOtherFields(t *testing.T) {
+	got := logWith(compositeOpts(cloak.WithCompositeScan()), func(l *slog.Logger) {
+		l.Info("m", "v", groupValuer{})
+	})
+	if !strings.Contains(got, "id=7") && !strings.Contains(got, "id:7") {
+		t.Errorf("group siblings must survive: %s", got)
+	}
+}
+
+func TestCompositeScanOffByDefault(t *testing.T) {
+	for _, attr := range []slog.Attr{
+		slog.Any("v", account{Email: "john@example.com"}),
+		slog.Any("v", map[string]any{"mail": "john@example.com"}),
+		slog.Any("v", []string{"john@example.com"}),
+	} {
+		got := logWith(compositeOpts(), func(l *slog.Logger) { l.Info("m", attr) })
+		if !strings.Contains(got, "john@example.com") {
+			t.Errorf("default must not walk composites: %s", got)
+		}
+	}
+}

@@ -128,6 +128,66 @@ func TestReadmeNilNext(t *testing.T) {
 	slog.New(cloak.New(nil, cloak.WithDefaultPII())).Info("m", "password", "x")
 }
 
+// The README shows a LogValuer keeping its own identity and still being masked.
+type readmeEmail string
+
+func (readmeEmail) LogValue() slog.Value { return slog.StringValue("john@example.com") }
+
+func TestReadmeLogValuerPrecedence(t *testing.T) {
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
+		cloak.WithDefaultPIIValues(), cloak.WithCompositeScan()))
+	logger.Info("m", "mail", readmeEmail("x"))
+
+	got := b.String()
+	if strings.Contains(got, "john@example.com") {
+		t.Fatalf("LogValue output leaked: %s", got)
+	}
+	if !strings.Contains(got, "j***@example.com") {
+		t.Fatalf("expected the LogValue output to be masked: %s", got)
+	}
+}
+
+// The README claims reflection never runs without a composite option.
+func TestReadmeCompositeOptionsAreOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []cloak.Option
+		val  any
+	}{
+		{"struct", []cloak.Option{cloak.WithStructScan()}, readmeAccount{Email: "john@example.com"}},
+		{"map", []cloak.Option{cloak.WithMapScan()}, map[string]any{"contact": "john@example.com"}},
+		{"slice", []cloak.Option{cloak.WithSliceScan()}, []string{"john@example.com"}},
+		{"composite", []cloak.Option{cloak.WithCompositeScan()}, readmeAccount{Email: "john@example.com"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var b bytes.Buffer
+			logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
+				append([]cloak.Option{cloak.WithDefaultPII()}, tc.opts...)...))
+			logger.Info("m", "v", tc.val)
+			if strings.Contains(b.String(), "john@example.com") {
+				t.Fatalf("%s should have masked its shape: %s", tc.name, b.String())
+			}
+		})
+	}
+}
+
+type readmeAccount struct {
+	ID    int
+	Email string
+}
+
+func TestReadmeCompositeScopeIsIndependent(t *testing.T) {
+	// WithStructScan alone must not touch a slice.
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
+		cloak.WithDefaultPII(), cloak.WithStructScan()))
+	logger.Info("m", "emails", []string{"john@example.com"})
+	if !strings.Contains(b.String(), "john@example.com") {
+		t.Fatal("slice should be out of scope for WithStructScan")
+	}
+}
+
 func TestReadmeMainExampleCompiles(t *testing.T) {
 	// Matches the README "Usage" block, writing to a buffer instead of stdout.
 	var out bytes.Buffer
@@ -135,7 +195,7 @@ func TestReadmeMainExampleCompiles(t *testing.T) {
 		slog.NewJSONHandler(&out, nil),
 		cloak.WithDefaultPII(),
 		cloak.WithMessageScan(),
-		cloak.WithAnyScan(),
+		cloak.WithCompositeScan(),
 	)
 	slog.New(handler).Info("user john@example.com logged in", "customer", struct{ Email string }{Email: "a@b.com"})
 	t.Logf("full preset: %s", strings.TrimSpace(out.String()))

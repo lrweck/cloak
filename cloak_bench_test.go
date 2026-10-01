@@ -52,6 +52,32 @@ func BenchmarkLogWithPII(b *testing.B) {
 	}
 }
 
+func BenchmarkCompositeScan(b *testing.B) {
+	type payload struct {
+		ID    int
+		Email string
+		CPF   string
+	}
+	cases := []struct {
+		name string
+		opts []Option
+	}{
+		{"disabled", []Option{WithDefaultPII()}},
+		{"struct", []Option{WithDefaultPII(), WithStructScan()}},
+		{"map", []Option{WithDefaultPII(), WithMapScan()}},
+		{"slice", []Option{WithDefaultPII(), WithSliceScan()}},
+		{"composite", []Option{WithDefaultPII(), WithCompositeScan()}},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			logger := benchHandler(b, tc.opts...)
+			for b.Loop() {
+				logger.Info("m", "acct", payload{ID: 1, Email: "john@example.com", CPF: "529.982.247-25"})
+			}
+		})
+	}
+}
+
 func BenchmarkKeyLookup(b *testing.B) {
 	c := &config{keys: make(map[string]Masker), skip: make(map[string]struct{})}
 	WithDefaultPIIKeys()(c)

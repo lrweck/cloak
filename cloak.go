@@ -9,7 +9,7 @@ package cloak
 
 import (
 	"context"
-	"fmt"
+
 	"log/slog"
 	"strings"
 	"unicode/utf8"
@@ -82,9 +82,9 @@ type config struct {
 	// scanMessage runs the value detectors over the log message itself, which is
 	// where unstructured text usually leaks.
 	scanMessage bool
-	// scanAny also inspects values logged through slog.Any, by rendering them with
-	// the same fmt verb the wrapped handler would use.
-	scanAny bool
+	// scan is the set of composite kinds to walk by reflection. Zero means no
+	// reflection happens at all, which keeps reflect off the default path.
+	scan composite
 }
 
 // maskerFor returns the rule matching a normalized key, if any.
@@ -202,15 +202,46 @@ func WithMessageScan() Option {
 	return func(c *config) { c.scanMessage = true }
 }
 
-// WithAnyScan also inspects values logged through [slog.Any], rendering them with the
-// same "%+v" the wrapped handler uses.
+// WithStructScan walks struct values logged through [slog.Any], masking PII in their
+// fields by field name and by value.
 //
-// This catches structs and slices that carry PII in their fields, at the cost of
-// turning the attribute into a masked string. It is off by default: it changes the
-// logged shape, and a caller who knows a field is sensitive should name it with
-// [WithKey] instead.
-func WithAnyScan() Option {
-	return func(c *config) { c.scanAny = true }
+// The value keeps its type: only the offending fields are replaced, so the record
+// still logs a structured object.
+//
+//	cloak.WithStructScan()   // slog.Any("user", User{Email: ...})
+func WithStructScan() Option {
+	return func(c *config) { c.scan |= compositeStruct | compositePtr }
+}
+
+// WithMapScan walks map values logged through [slog.Any], masking both keys and values.
+// A key match wins over the value detectors, so map[string]any{"password": "x"} is
+// caught by name while a bare address is caught as a value.
+//
+//	cloak.WithMapScan()   // slog.Any("ctx", map[string]any{"email": ...})
+func WithMapScan() Option {
+	return func(c *config) { c.scan |= compositeMap | compositePtr }
+}
+
+// WithSliceScan walks slice values logged through [slog.Any], masking each element and
+// recursing into nested containers.
+//
+// []byte is excluded: it is data, not a container of things to log, and walking it
+// would rewrite a payload into decimal digits.
+//
+//	cloak.WithSliceScan()   // slog.Any("emails", []string{"a@example.com"})
+func WithSliceScan() Option {
+	return func(c *config) { c.scan |= compositeSlice | compositePtr }
+}
+
+// WithCompositeScan enables [WithStructScan], [WithMapScan] and [WithSliceScan] at
+// once, and is what you want unless you have a reason to scope the walk.
+//
+// Pointers are always followed, since a pointer is just an address to the value behind
+// it.
+func WithCompositeScan() Option {
+	return func(c *config) {
+		c.scan |= compositeStruct | compositeMap | compositeSlice | compositePtr
+	}
 }
 
 type Handler struct {
@@ -313,16 +344,19 @@ func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 			return slog.String(a.Key, s), true
 		}
 	case slog.KindAny:
-		if !h.cfg.scanAny {
+		// Check the flag before calling classify, so a handler with no composite
+		// option never reaches reflect on this path.
+		if h.cfg.scan == 0 {
+			break
+		}
+		if !h.cfg.scans(v.Any()) {
 			break
 		}
 		if _, ok := h.cfg.skip[key]; ok {
 			return a, false
 		}
-		// slog renders Any with %+v; do the same so the detectors see what the
-		// wrapped handler would have printed.
-		if s, changed := h.maskString(fmt.Sprintf("%+v", v.Any())); changed {
-			return slog.String(a.Key, s), true
+		if out, changed := h.walk(v.Any(), 0); changed {
+			return slog.Attr{Key: a.Key, Value: slog.AnyValue(out)}, true
 		}
 	}
 	if a.Value.Kind() == slog.KindLogValuer {
