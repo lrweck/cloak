@@ -257,7 +257,7 @@ never evaluates `LogValue()` again.
 | `WithMapScan()` | Walk `slog.Any` maps |
 | `WithSliceScan()` | Walk `slog.Any` slices |
 | `WithCompositeScan()` | All three composite options |
-| `WithContextValues(vals...)` | Copy masked context values onto every record |
+| `WithContextAttrs(pulls...)` | Copy masked context values onto every record |
 | `New(nil, ...)` | Discard everything; useful in tests |
 
 For custom detectors, order your own `WithValueFunc` list the same way: cheapest gate
@@ -276,17 +276,24 @@ ctx = context.WithValue(ctx, userKey, user)   // middleware, no logging in sight
 slog.InfoContext(ctx, "checkout started")     // somewhere else, entirely
 ```
 
-`WithContextValues` declares the key once, so no call site can leak it by forgetting a
-field:
+`WithContextAttrs` registers functions that pull values out of the context, so no
+call site can leak one by forgetting a field:
 
 ```go
+// package auth — owns the unexported key
+func LogAttrs(ctx context.Context) []slog.Attr {
+    u, ok := userFrom(ctx)          // uses the private key
+    if !ok {
+        return nil
+    }
+    return []slog.Attr{slog.Any("user", u)}
+}
+
+// package main
 handler := cloak.New(next,
     cloak.WithDefaultPII(),
     cloak.WithStructScan(),
-    cloak.WithContextValues(
-        cloak.ContextValue{Name: "user", Key: userKey{}},
-        cloak.ContextValue{Name: "request_id", Key: requestKey{}},
-    ),
+    cloak.WithContextAttrs(auth.LogAttrs, reqid.LogAttrs),
 )
 ```
 
@@ -294,10 +301,18 @@ handler := cloak.New(next,
 {"msg":"checkout started","user":{"ID":7,"Email":"[REDACTED]","CPF":"[REDACTED]"},"request_id":"req-abc-123"}
 ```
 
-Masking is not special-cased: the value goes through exactly the same path as an
-attribute you logged yourself, so key rules, detectors, composite walks and `LogValuer`
-precedence all apply. `Name` is the attribute name and the key that key rules match
-on. A key absent from the context is skipped rather than logged as null.
+**Why a function and not a context key.** The idiomatic key is an unexported type, so
+naming it from the package that configures logging does not compile — and exporting it
+just to configure a logger gives up the collision safety that makes the private type
+worth having. The pull function lives where the key is reachable, so the key never
+leaves its package. It also suits sources that are not context values at all, such as
+request-scoped state held by a web framework, and can compute a value rather than
+merely read one.
+
+Masking is not special-cased: whatever a pull returns goes through exactly the same
+path as an attribute you logged yourself, so key rules, detectors, composite walks,
+`LogValuer` precedence and `WithSkipValueScan` all apply. Return `nil` for anything
+absent, so a missing value is skipped rather than logged as null.
 
 **A struct value still needs a composite option.** `WithStructScan()` or
 `WithCompositeScan()` — otherwise the struct stays one opaque value and its fields are

@@ -10,16 +10,45 @@ import (
 	"github.com/lrweck/cloak"
 )
 
-// Context keys are deliberately a distinct type, as go vet wants.
+// The idiomatic context key is an unexported type. These tests live in package
+// cloak_test precisely so that naming it here would not compile — which is the point:
+// the pull function is defined where the key is reachable, and the key never escapes.
 type (
 	userKey    struct{}
 	requestKey struct{}
+	absentKey  struct{}
 )
 
 type principal struct {
 	ID    int
 	Email string
 	CPF   string
+}
+
+func withUser(ctx context.Context, p principal) context.Context {
+	return context.WithValue(ctx, userKey{}, p)
+}
+
+// This is what an application package would export: the extractor, not the key.
+func userAttrs(ctx context.Context) []slog.Attr {
+	u, ok := ctx.Value(userKey{}).(principal)
+	if !ok {
+		return nil
+	}
+	return []slog.Attr{slog.Any("user", u)}
+}
+
+func requestAttrs(ctx context.Context) []slog.Attr {
+	id, ok := ctx.Value(requestKey{}).(string)
+	if !ok {
+		return nil
+	}
+	return []slog.Attr{slog.String("request_id", id)}
+}
+
+// Two pull functions, one option.
+func requestAndUserAttrs(ctx context.Context) []slog.Attr {
+	return append(requestAttrs(ctx), userAttrs(ctx)...)
 }
 
 func logCtx(opts []cloak.Option, ctx context.Context) string {
@@ -30,14 +59,12 @@ func logCtx(opts []cloak.Option, ctx context.Context) string {
 }
 
 // A struct attached to the context must be walked, or its fields leak wholesale.
-func TestContextValueStructIsWalked(t *testing.T) {
-	ctx := context.WithValue(context.Background(), userKey{}, principal{
-		ID: 7, Email: "john@example.com", CPF: "529.982.247-25",
-	})
+func TestContextStructIsWalked(t *testing.T) {
+	ctx := withUser(context.Background(), principal{ID: 7, Email: "john@example.com", CPF: "529.982.247-25"})
 	got := logCtx([]cloak.Option{
 		cloak.WithDefaultPII(),
 		cloak.WithStructScan(),
-		cloak.WithContextValues(cloak.ContextValue{Name: "user", Key: userKey{}}),
+		cloak.WithContextAttrs(userAttrs),
 	}, ctx)
 
 	for _, leaked := range []string{"john@example.com", "529.982.247"} {
@@ -50,23 +77,31 @@ func TestContextValueStructIsWalked(t *testing.T) {
 	}
 }
 
-// Without a composite walk the struct stays opaque. Documented, and worth pinning so
-// the requirement is explicit rather than discovered at a review.
-func TestContextValueStructNeedsCompositeScan(t *testing.T) {
-	ctx := context.WithValue(context.Background(), userKey{}, principal{Email: "john@example.com"})
+// Without a composite walk the struct stays opaque. Pinned so the requirement is
+// explicit rather than discovered at a review.
+func TestContextStructNeedsCompositeScan(t *testing.T) {
+	ctx := withUser(context.Background(), principal{Email: "john@example.com"})
 	got := logCtx([]cloak.Option{
 		cloak.WithDefaultPII(),
-		cloak.WithContextValues(cloak.ContextValue{Name: "user", Key: userKey{}}),
+		cloak.WithContextAttrs(userAttrs),
 	}, ctx)
 	t.Logf("without a composite scan: %s", got)
 }
 
-// A string in the context goes through the detectors like any other string attribute.
-func TestContextValueStringIsMasked(t *testing.T) {
+// mailAttrs reads a plain string out of the context, the other common shape.
+func mailAttrs(ctx context.Context) []slog.Attr {
+	mail, ok := ctx.Value(userKey{}).(string)
+	if !ok {
+		return nil
+	}
+	return []slog.Attr{slog.String("mail", mail)}
+}
+
+func TestContextStringIsMasked(t *testing.T) {
 	ctx := context.WithValue(context.Background(), userKey{}, "john@example.com")
 	got := logCtx([]cloak.Option{
 		cloak.WithDefaultPIIValues(),
-		cloak.WithContextValues(cloak.ContextValue{Name: "mail", Key: userKey{}}),
+		cloak.WithContextAttrs(mailAttrs),
 	}, ctx)
 
 	if strings.Contains(got, "john@example.com") {
@@ -78,11 +113,11 @@ func TestContextValueStringIsMasked(t *testing.T) {
 }
 
 // A key rule on the attribute name wins, as it would for a logged attribute.
-func TestContextValueKeyRuleWins(t *testing.T) {
-	ctx := context.WithValue(context.Background(), userKey{}, principal{ID: 7, Email: "john@example.com"})
+func TestContextKeyRuleWins(t *testing.T) {
+	ctx := withUser(context.Background(), principal{ID: 7, Email: "john@example.com"})
 	got := logCtx([]cloak.Option{
 		cloak.WithKey(cloak.Redact, "user"),
-		cloak.WithContextValues(cloak.ContextValue{Name: "user", Key: userKey{}}),
+		cloak.WithContextAttrs(userAttrs),
 	}, ctx)
 
 	if strings.Contains(got, "john@example.com") {
@@ -93,12 +128,11 @@ func TestContextValueKeyRuleWins(t *testing.T) {
 	}
 }
 
-// Non-sensitive context values pass through untouched.
-func TestContextValueScalarPreserved(t *testing.T) {
+func TestContextScalarPreserved(t *testing.T) {
 	ctx := context.WithValue(context.Background(), requestKey{}, "req-abc-123")
 	got := logCtx([]cloak.Option{
 		cloak.WithDefaultPII(),
-		cloak.WithContextValues(cloak.ContextValue{Name: "request_id", Key: requestKey{}}),
+		cloak.WithContextAttrs(requestAttrs),
 	}, ctx)
 
 	if !strings.Contains(got, "req-abc-123") {
@@ -106,53 +140,80 @@ func TestContextValueScalarPreserved(t *testing.T) {
 	}
 }
 
-// An absent key is skipped, not logged as null.
-func TestContextValueAbsentIsSkipped(t *testing.T) {
+// A pull that returns nil must not contribute anything at all.
+func TestContextAbsentIsSkipped(t *testing.T) {
 	got := logCtx([]cloak.Option{
 		cloak.WithDefaultPII(),
-		cloak.WithContextValues(
-			cloak.ContextValue{Name: "user", Key: userKey{}},
-			cloak.ContextValue{Name: "request_id", Key: requestKey{}},
-		),
-	}, context.Background())
+		cloak.WithContextAttrs(requestAndUserAttrs, func(context.Context) []slog.Attr { return nil }),
+	}, context.WithValue(context.Background(), absentKey{}, "x"))
 
-	if strings.Contains(got, "user") || strings.Contains(got, "request_id") {
-		t.Fatalf("absent context keys must not appear: %s", got)
+	if strings.Contains(got, "request_id") || strings.Contains(got, "user") {
+		t.Fatalf("absent context values must not appear: %s", got)
 	}
 }
 
-// Context values reach every record, including one logged through a derived logger.
-func TestContextValueOnDerivedLogger(t *testing.T) {
-	ctx := context.WithValue(context.Background(), requestKey{}, "req-abc-123")
+// Several pulls in one option, and several options.
+func TestContextMultiplePulls(t *testing.T) {
+	ctx := context.WithValue(withUser(context.Background(), principal{ID: 7, Email: "john@example.com"}),
+		requestKey{}, "req-abc-123")
 	got := logCtx([]cloak.Option{
 		cloak.WithDefaultPII(),
-		cloak.WithContextValues(cloak.ContextValue{Name: "request_id", Key: requestKey{}}),
+		cloak.WithStructScan(),
+		cloak.WithContextAttrs(requestAttrs, userAttrs),
 	}, ctx)
 
-	// A second record through the same logger, to prove it is per-call not once.
+	if strings.Contains(got, "john@example.com") {
+		t.Fatalf("leaked: %s", got)
+	}
+	for _, want := range []string{"req-abc-123", `"ID":7`, "[REDACTED]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q: %s", want, got)
+		}
+	}
+}
+
+// The pull runs per record, not once at construction.
+func TestContextRunsPerRecord(t *testing.T) {
+	ctx := context.WithValue(context.Background(), requestKey{}, "req-abc-123")
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewJSONHandler(&b, nil),
-		cloak.WithDefaultPII(),
-		cloak.WithContextValues(cloak.ContextValue{Name: "request_id", Key: requestKey{}})))
+		cloak.WithDefaultPII(), cloak.WithContextAttrs(requestAttrs)))
 	logger.With("component", "http").InfoContext(ctx, "one")
 	logger.WithGroup("g").InfoContext(ctx, "two")
 
-	got = b.String()
+	got := b.String()
 	if n := strings.Count(got, "req-abc-123"); n != 2 {
-		t.Fatalf("expected the context value on both records, got %d: %s", n, got)
+		t.Fatalf("expected the value on both records, got %d: %s", n, got)
 	}
 	if !strings.Contains(got, "component") {
 		t.Fatalf("derived logger attrs lost: %s", got)
 	}
 }
 
-// LogValuer precedence holds for context values too.
-func TestContextValueLogValuerMasked(t *testing.T) {
+// A pull may compute a value rather than read one.
+func TestContextComputedValue(t *testing.T) {
+	got := logCtx([]cloak.Option{
+		cloak.WithDefaultPII(),
+		cloak.WithContextAttrs(func(ctx context.Context) []slog.Attr {
+			if ctx.Value(requestKey{}) == nil {
+				return nil
+			}
+			return []slog.Attr{slog.String("account", "acc_1234567890")}
+		}),
+	}, context.WithValue(context.Background(), requestKey{}, "req-1"))
+
+	if strings.Contains(got, "1234567890") {
+		t.Fatalf("leaked: %s", got)
+	}
+}
+
+// LogValuer precedence holds for pulled values too.
+func TestContextLogValuerMasked(t *testing.T) {
 	ctx := context.WithValue(context.Background(), userKey{}, resolved{raw: "john@example.com"})
 	got := logCtx([]cloak.Option{
 		cloak.WithDefaultPIIValues(),
 		cloak.WithCompositeScan(),
-		cloak.WithContextValues(cloak.ContextValue{Name: "mail", Key: userKey{}}),
+		cloak.WithContextAttrs(userAttrs),
 	}, ctx)
 
 	if strings.Contains(got, "john@example.com") {
@@ -160,14 +221,37 @@ func TestContextValueLogValuerMasked(t *testing.T) {
 	}
 }
 
-func BenchmarkContextValues(b *testing.B) {
+// WithSkipValueScan applies to pulled values, so a payload you keep verbatim can be
+// pulled without being rewritten.
+func TestContextSkipValueScan(t *testing.T) {
+	ctx := context.WithValue(context.Background(), requestKey{}, "john@example.com")
+	got := logCtx([]cloak.Option{
+		cloak.WithDefaultPIIValues(),
+		cloak.WithSkipValueScan("request_id"),
+		cloak.WithContextAttrs(requestAttrs),
+	}, ctx)
+
+	if !strings.Contains(got, "john@example.com") {
+		t.Fatalf("skip should have been honoured: %s", got)
+	}
+}
+
+func BenchmarkContextAttrs(b *testing.B) {
 	ctx := context.WithValue(context.Background(), requestKey{}, "req-abc-123")
-	var b2 bytes.Buffer
-	logger := slog.New(cloak.New(slog.NewJSONHandler(&b2, nil),
-		cloak.WithDefaultPII(),
-		cloak.WithContextValues(cloak.ContextValue{Name: "request_id", Key: requestKey{}})))
+	var buf bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewJSONHandler(&buf, nil),
+		cloak.WithDefaultPII(), cloak.WithContextAttrs(requestAttrs)))
 	b.ReportAllocs()
 	for b.Loop() {
 		logger.InfoContext(ctx, "event")
+	}
+}
+
+func BenchmarkContextAttrsDisabled(b *testing.B) {
+	var buf bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewJSONHandler(&buf, nil), cloak.WithDefaultPII()))
+	b.ReportAllocs()
+	for b.Loop() {
+		logger.InfoContext(context.Background(), "event")
 	}
 }

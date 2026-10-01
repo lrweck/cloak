@@ -197,7 +197,16 @@ type readmePrincipal struct {
 	Email string
 }
 
-func TestReadmeContextValues(t *testing.T) {
+// The README's pull function, defined where the unexported key is reachable.
+func readmeUserAttrs(ctx context.Context) []slog.Attr {
+	u, ok := ctx.Value(readmeUserKey{}).(readmePrincipal)
+	if !ok {
+		return nil
+	}
+	return []slog.Attr{slog.Any("user", u)}
+}
+
+func TestReadmeContextAttrs(t *testing.T) {
 	ctx := context.WithValue(context.Background(), readmeUserKey{},
 		readmePrincipal{ID: 7, Email: "john@example.com"})
 
@@ -205,9 +214,7 @@ func TestReadmeContextValues(t *testing.T) {
 	logger := slog.New(cloak.New(slog.NewJSONHandler(&b, nil),
 		cloak.WithDefaultPII(),
 		cloak.WithStructScan(),
-		cloak.WithContextValues(
-			cloak.ContextValue{Name: "user", Key: readmeUserKey{}},
-		),
+		cloak.WithContextAttrs(readmeUserAttrs),
 	))
 	logger.InfoContext(ctx, "checkout started")
 

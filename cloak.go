@@ -85,35 +85,46 @@ type config struct {
 	// scan is the set of composite kinds to walk by reflection. Zero means no
 	// reflection happens at all, which keeps reflect off the default path.
 	scan composite
-	// ctxValues are copied onto every record, masked like any other attribute.
-	ctxValues []ContextValue
+	// ctxPulls produce attributes from the context, masked like any others.
+	ctxPulls []func(context.Context) []slog.Attr
 }
 
-// ContextValue pairs a context key with the attribute name its value is logged under.
-type ContextValue struct {
-	// Name is the attribute name, and the key that key rules match on.
-	Name string
-	// Key is the context key passed to [context.WithValue]. Any type; it is never
-	// logged itself.
-	Key any
-}
-
-// WithContextValues copies the given context values onto every record, masked by the
-// same rules as any other attribute.
+// WithContextAttrs registers functions that pull values out of the context and copy
+// them onto every record, masked by the same rules as attributes you logged yourself.
 //
-// It exists because a value carried in the context is usually attached once, far from
+// It exists because a value carried in the context is attached once, usually far from
 // the log call that will expose it:
 //
 //	ctx = context.WithValue(ctx, userKey, user)     // middleware, no logging in sight
 //	slog.InfoContext(ctx, "loaded")                // somewhere else, entirely
 //
-// Declaring the key once means the value cannot be logged raw by forgetting a field at
-// the call site. Masking is not special: a key rule, a detector, or a composite walk
-// all apply exactly as they would to an attribute you logged yourself.
+// A pull function rather than a key, because the idiomatic context key is a private
+// type: naming it from outside the package that owns it does not compile, and
+// exporting it just to configure a logger gives up the collision safety that makes the
+// private type worth having. The closure lives where the key is reachable, so the key
+// never leaves its package:
 //
-// Keys absent from the context are skipped rather than logged as null.
-func WithContextValues(vals ...ContextValue) Option {
-	return func(c *config) { c.ctxValues = append(c.ctxValues, vals...) }
+//	// package auth
+//	func LogAttrs(ctx context.Context) []slog.Attr {
+//	    u, ok := userFrom(ctx)          // uses the unexported key
+//	    if !ok {
+//	        return nil
+//	    }
+//	    return []slog.Attr{slog.Any("user", u)}
+//	}
+//
+//	// package main
+//	cloak.WithContextAttrs(auth.LogAttrs)
+//
+// Masking is not special-cased: a key rule, a detector, a composite walk and
+// LogValuer precedence all apply exactly as they would to an attribute you logged
+// yourself. Return nil for anything absent, so a missing value is skipped rather than
+// logged as null.
+//
+// It also suits sources that are not context values at all, such as request-scoped
+// state kept by a web framework.
+func WithContextAttrs(pulls ...func(context.Context) []slog.Attr) Option {
+	return func(c *config) { c.ctxPulls = append(c.ctxPulls, pulls...) }
 }
 
 // maskerFor returns the rule matching a normalized key, if any.
@@ -330,20 +341,18 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	return h.next.Handle(ctx, r)
 }
 
-// contextAttrs masks the configured context values and returns them as attributes.
-// A key that is absent from the context is skipped rather than logged as null.
+// contextAttrs masks whatever the registered pulls produce and returns them as
+// attributes.
 func (h *Handler) contextAttrs(ctx context.Context) []slog.Attr {
-	if len(h.cfg.ctxValues) == 0 {
+	if len(h.cfg.ctxPulls) == 0 {
 		return nil
 	}
-	attrs := make([]slog.Attr, 0, len(h.cfg.ctxValues))
-	for _, cv := range h.cfg.ctxValues {
-		v := ctx.Value(cv.Key)
-		if v == nil {
-			continue
+	var attrs []slog.Attr
+	for _, pull := range h.cfg.ctxPulls {
+		for _, a := range pull(ctx) {
+			na, _ := h.attr(a)
+			attrs = append(attrs, na)
 		}
-		na, _ := h.attr(slog.Any(cv.Name, v))
-		attrs = append(attrs, na)
 	}
 	return attrs
 }
