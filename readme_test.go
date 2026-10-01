@@ -2,6 +2,7 @@ package cloak_test
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
@@ -185,6 +186,40 @@ func TestReadmeCompositeScopeIsIndependent(t *testing.T) {
 	logger.Info("m", "emails", []string{"john@example.com"})
 	if !strings.Contains(b.String(), "john@example.com") {
 		t.Fatal("slice should be out of scope for WithStructScan")
+	}
+}
+
+// The README claims a context-declared value is masked at every call site.
+type readmeUserKey struct{}
+
+type readmePrincipal struct {
+	ID    int
+	Email string
+}
+
+func TestReadmeContextValues(t *testing.T) {
+	ctx := context.WithValue(context.Background(), readmeUserKey{},
+		readmePrincipal{ID: 7, Email: "john@example.com"})
+
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewJSONHandler(&b, nil),
+		cloak.WithDefaultPII(),
+		cloak.WithStructScan(),
+		cloak.WithContextValues(
+			cloak.ContextValue{Name: "user", Key: readmeUserKey{}},
+		),
+	))
+	logger.InfoContext(ctx, "checkout started")
+
+	got := b.String()
+	if strings.Contains(got, "john@example.com") {
+		t.Fatalf("context value leaked: %s", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("expected masking: %s", got)
+	}
+	if !strings.Contains(got, `"ID":7`) {
+		t.Fatalf("expected the harmless field to survive: %s", got)
 	}
 }
 

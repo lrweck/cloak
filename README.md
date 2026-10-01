@@ -24,6 +24,7 @@ slog.Info("login", "email", user.Email)                    // someone will forge
 slog.Info("user " + user.Email + " logged in")             // PII in the message
 slog.Info("loaded", "user", user)                          // a whole struct
 slog.WithGroup("req").Info("done", "cpf", doc.Number)      // nested, easy to miss
+slog.InfoContext(ctx, "checkout started")                  // PII riding in the context
 ```
 
 Once written, it is already in your aggregator, your backups and someone else's
@@ -256,6 +257,7 @@ never evaluates `LogValue()` again.
 | `WithMapScan()` | Walk `slog.Any` maps |
 | `WithSliceScan()` | Walk `slog.Any` slices |
 | `WithCompositeScan()` | All three composite options |
+| `WithContextValues(vals...)` | Copy masked context values onto every record |
 | `New(nil, ...)` | Discard everything; useful in tests |
 
 For custom detectors, order your own `WithValueFunc` list the same way: cheapest gate
@@ -263,6 +265,44 @@ first, and put any loose heuristic last.
 
 Reflection runs only when a composite option is on. Without one, `reflect` is never
 called on the logging path.
+
+### Values from the context
+
+A value carried in a context is attached once, usually far from the log call that will
+expose it:
+
+```go
+ctx = context.WithValue(ctx, userKey, user)   // middleware, no logging in sight
+slog.InfoContext(ctx, "checkout started")     // somewhere else, entirely
+```
+
+`WithContextValues` declares the key once, so no call site can leak it by forgetting a
+field:
+
+```go
+handler := cloak.New(next,
+    cloak.WithDefaultPII(),
+    cloak.WithStructScan(),
+    cloak.WithContextValues(
+        cloak.ContextValue{Name: "user", Key: userKey{}},
+        cloak.ContextValue{Name: "request_id", Key: requestKey{}},
+    ),
+)
+```
+
+```json
+{"msg":"checkout started","user":{"ID":7,"Email":"[REDACTED]","CPF":"[REDACTED]"},"request_id":"req-abc-123"}
+```
+
+Masking is not special-cased: the value goes through exactly the same path as an
+attribute you logged yourself, so key rules, detectors, composite walks and `LogValuer`
+precedence all apply. `Name` is the attribute name and the key that key rules match
+on. A key absent from the context is skipped rather than logged as null.
+
+**A struct value still needs a composite option.** `WithStructScan()` or
+`WithCompositeScan()` — otherwise the struct stays one opaque value and its fields are
+not reached, exactly as with `slog.Any`. Cloak does not turn reflection on implicitly,
+so that cost stays opt-in.
 
 ### The message
 

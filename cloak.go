@@ -85,6 +85,35 @@ type config struct {
 	// scan is the set of composite kinds to walk by reflection. Zero means no
 	// reflection happens at all, which keeps reflect off the default path.
 	scan composite
+	// ctxValues are copied onto every record, masked like any other attribute.
+	ctxValues []ContextValue
+}
+
+// ContextValue pairs a context key with the attribute name its value is logged under.
+type ContextValue struct {
+	// Name is the attribute name, and the key that key rules match on.
+	Name string
+	// Key is the context key passed to [context.WithValue]. Any type; it is never
+	// logged itself.
+	Key any
+}
+
+// WithContextValues copies the given context values onto every record, masked by the
+// same rules as any other attribute.
+//
+// It exists because a value carried in the context is usually attached once, far from
+// the log call that will expose it:
+//
+//	ctx = context.WithValue(ctx, userKey, user)     // middleware, no logging in sight
+//	slog.InfoContext(ctx, "loaded")                // somewhere else, entirely
+//
+// Declaring the key once means the value cannot be logged raw by forgetting a field at
+// the call site. Masking is not special: a key rule, a detector, or a composite walk
+// all apply exactly as they would to an attribute you logged yourself.
+//
+// Keys absent from the context are skipped rather than logged as null.
+func WithContextValues(vals ...ContextValue) Option {
+	return func(c *config) { c.ctxValues = append(c.ctxValues, vals...) }
 }
 
 // maskerFor returns the rule matching a normalized key, if any.
@@ -278,8 +307,8 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	if h.next == nil {
 		return nil
 	}
-	var attrs []slog.Attr
-	changed := false
+	attrs := h.contextAttrs(ctx)
+	changed := len(attrs) > 0
 	r.Attrs(func(a slog.Attr) bool {
 		na, c := h.attr(a)
 		attrs = append(attrs, na)
@@ -299,6 +328,24 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		r = nr
 	}
 	return h.next.Handle(ctx, r)
+}
+
+// contextAttrs masks the configured context values and returns them as attributes.
+// A key that is absent from the context is skipped rather than logged as null.
+func (h *Handler) contextAttrs(ctx context.Context) []slog.Attr {
+	if len(h.cfg.ctxValues) == 0 {
+		return nil
+	}
+	attrs := make([]slog.Attr, 0, len(h.cfg.ctxValues))
+	for _, cv := range h.cfg.ctxValues {
+		v := ctx.Value(cv.Key)
+		if v == nil {
+			continue
+		}
+		na, _ := h.attr(slog.Any(cv.Name, v))
+		attrs = append(attrs, na)
+	}
+	return attrs
 }
 
 func (h *Handler) WithAttrs(as []slog.Attr) slog.Handler {
