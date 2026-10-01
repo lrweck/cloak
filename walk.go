@@ -253,9 +253,9 @@ func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 	dst := reflect.MakeMapWithSize(v.Type(), v.Len())
 	wide := make(map[string]any, v.Len())
 	changed, shaped := false, true
-	for iter := v.MapRange(); iter.Next(); {
-		key, value := iter.Key(), iter.Value()
-
+	// reflect.Value.Seq2, so map entries arrive through the range-over-func
+	// protocol rather than a manual MapRange loop.
+	for key, value := range v.Seq2() {
 		maskedKey, kc := h.walk(key.Interface(), depth+1)
 		maskedValue, vc := h.walk(value.Interface(), depth+1)
 
@@ -315,12 +315,15 @@ func (h *Handler) walkSlice(v reflect.Value, depth int) (any, bool) {
 	dst := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
 	wide := make([]any, v.Len())
 	changed, shaped := false, true
+	// The integer range, since Seq yields elements without their index and dst.Index
+	// needs one.
 	for i := range v.Len() {
-		out, c := h.walk(v.Index(i).Interface(), depth+1)
-		wide[i] = loose(out, c, v.Index(i).Interface())
+		elem := v.Index(i)
+		out, c := h.walk(elem.Interface(), depth+1)
+		wide[i] = loose(out, c, elem.Interface())
 
 		if !c {
-			dst.Index(i).Set(v.Index(i))
+			dst.Index(i).Set(elem)
 			continue
 		}
 		changed = true
@@ -332,7 +335,7 @@ func (h *Handler) walkSlice(v reflect.Value, depth int) (any, bool) {
 		// for instance. Keeping the original would leak, so widen the slice
 		// instead and let the field type follow.
 		shaped = false
-		dst.Index(i).Set(v.Index(i))
+		dst.Index(i).Set(elem)
 	}
 	if !changed {
 		return v.Interface(), false

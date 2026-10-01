@@ -919,11 +919,9 @@ func validEmailDomain(s string) bool {
 	if len(s) == 0 || strings.HasPrefix(s, ".") || strings.HasSuffix(s, ".") || strings.Contains(s, "..") {
 		return false
 	}
-	parts := strings.Split(s, ".")
-	if len(parts) < 2 {
-		return false
-	}
-	for _, p := range parts {
+	// SplitSeq, so no slice is allocated to walk the labels.
+	labels, last := 0, 0
+	for p := range strings.SplitSeq(s, ".") {
 		if p == "" || p[0] == '-' || p[len(p)-1] == '-' {
 			return false
 		}
@@ -932,8 +930,10 @@ func validEmailDomain(s string) bool {
 				return false
 			}
 		}
+		labels++
+		last = len(p)
 	}
-	return len(parts[len(parts)-1]) >= 2
+	return labels >= 2 && last >= 2
 }
 
 func hasAtLeastDigits(s string, n int) bool {
@@ -1036,9 +1036,11 @@ func MaskIPv4(s string) (string, bool) {
 			if out == nil {
 				out = make([]byte, 0, len(s))
 			}
-			parts := strings.Split(candidate, ".")
+			// Cut rather than Split: only the first octet survives, so there is
+			// no reason to allocate the rest.
+			firstOctet, _, _ := strings.Cut(candidate, ".")
 			out = append(out, s[last:i]...)
-			out = append(out, parts[0]...)
+			out = append(out, firstOctet...)
 			out = append(out, ".*.*.*"...)
 			last = j
 		}
@@ -1052,11 +1054,12 @@ func MaskIPv4(s string) (string, bool) {
 }
 
 func validIPv4(s string) bool {
-	p := strings.Split(s, ".")
-	if len(p) != 4 {
-		return false
-	}
-	for _, x := range p {
+	// SplitSeq, and the count comes from the loop rather than a slice length.
+	octets := 0
+	for x := range strings.SplitSeq(s, ".") {
+		if octets == 4 {
+			return false
+		}
 		if len(x) == 0 || len(x) > 3 || (len(x) > 1 && x[0] == '0') {
 			return false
 		}
@@ -1070,8 +1073,9 @@ func validIPv4(s string) bool {
 		if n > 255 {
 			return false
 		}
+		octets++
 	}
-	return true
+	return octets == 4
 }
 
 func MaskUUID(s string) (string, bool) {
