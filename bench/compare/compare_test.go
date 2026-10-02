@@ -32,69 +32,53 @@ var cleanRecord = []any{"user_id", 42, "status", 200, "latency_ms", 12, "route",
 // A record that trips a key rule.
 var secretRecord = []any{"user_id", 42, "password", "hunter2", "status", 200}
 
-// jsonOpts builds the sink's options, optionally dropping the built-in time attribute.
-//
-// The time attribute matters more than it looks. A ReplaceAttr hook is handed every
-// attribute the handler builds, including `time`, and masq clones whatever it is
-// handed: a time.Time carries a *time.Location, so cloning it walks the whole zone
-// table. Measuring both ways separates the cost of masking from the cost of walking
-// the clock, and the second number is the one that compares libraries.
-func jsonOpts(stripTime bool, replace func([]string, slog.Attr) slog.Attr) *slog.HandlerOptions {
-	if !stripTime {
-		return &slog.HandlerOptions{ReplaceAttr: replace}
-	}
-	return &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-		if a.Key == slog.TimeKey && len(groups) == 0 {
-			return slog.Attr{}
-		}
-		if replace == nil {
-			return a
-		}
-		return replace(groups, a)
-	}}
-}
-
-type lib struct {
+// library is one masking library together with how to configure it for key rules.
+type library struct {
 	name string
-	// build returns a logger writing to w. An error is a configuration failure for
-	// that library, reported once rather than per iteration. stripTime drops the
-	// built-in time attribute, which is what shows how much of masq's cost is the
-	// clock rather than the masking.
-	build func(w io.Writer, stripTime bool) (*slog.Logger, error)
+	// buildKeys returns a logger writing to w, configured to mask those keys.
+	buildKeys func(w io.Writer, keys []string) (*slog.Logger, error)
 }
 
-func libraries() []lib {
-	return []lib{
-		{"cloak", func(w io.Writer, strip bool) (*slog.Logger, error) {
-			return slog.New(cloak.New(slog.NewJSONHandler(w, jsonOpts(strip, nil)),
-				cloak.WithKeys(cloak.Redact, sensitiveKeys...))), nil
+func libraries() []library {
+	return []library{
+		{name: "bare", buildKeys: func(w io.Writer, _ []string) (*slog.Logger, error) {
+			return slog.New(slog.NewJSONHandler(w, nil)), nil
 		}},
-		{"masq", func(w io.Writer, strip bool) (*slog.Logger, error) {
-			opts := make([]masq.Option, 0, len(sensitiveKeys))
-			for _, k := range sensitiveKeys {
+		{name: "cloak", buildKeys: func(w io.Writer, keys []string) (*slog.Logger, error) {
+			return slog.New(cloak.New(slog.NewJSONHandler(w, nil),
+				cloak.WithKeys(cloak.Redact, keys...))), nil
+		}},
+		{name: "masq", buildKeys: func(w io.Writer, keys []string) (*slog.Logger, error) {
+			opts := make([]masq.Option, 0, len(keys))
+			for _, k := range keys {
 				opts = append(opts, masq.WithFieldName(k))
 			}
-			return slog.New(slog.NewJSONHandler(w, jsonOpts(strip, masq.New(opts...)))), nil
+			return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
+				ReplaceAttr: masq.New(opts...),
+			})), nil
 		}},
-		// masq's escape hatch for the time attribute: WithAllowedType tells it not to
-		// clone that type at all. This is the fair configuration to compare against,
-		// since the default one deep-clones *time.Location on every record.
-		{"masq+allowed-time", func(w io.Writer, strip bool) (*slog.Logger, error) {
-			opts := make([]masq.Option, 0, len(sensitiveKeys)+1)
-			for _, k := range sensitiveKeys {
+		{name: "masq+allowed-time", buildKeys: func(w io.Writer, keys []string) (*slog.Logger, error) {
+			opts := make([]masq.Option, 0, len(keys)+1)
+			for _, k := range keys {
 				opts = append(opts, masq.WithFieldName(k))
 			}
+			// masq's escape hatch for the time attribute: it deep-clones whatever it
+			// is handed, and a time.Time carries a *time.Location. This is the fair
+			// configuration to compare, since the default one walks the whole zone
+			// table on every record.
 			opts = append(opts, masq.WithAllowedType(reflect.TypeFor[time.Time]()))
-			return slog.New(slog.NewJSONHandler(w, jsonOpts(strip, masq.New(opts...)))), nil
+			return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
+				ReplaceAttr: masq.New(opts...),
+			})), nil
 		}},
-		{"go-slog-redact", func(w io.Writer, strip bool) (*slog.Logger, error) {
-			return slog.New(redact2.New(slog.NewJSONHandler(w, jsonOpts(strip, nil)),
-				redact2.WithSensitiveKeys(sensitiveKeys...))), nil
+		{name: "go-slog-redact", buildKeys: func(w io.Writer, keys []string) (*slog.Logger, error) {
+			return slog.New(redact2.New(slog.NewJSONHandler(w, nil),
+				redact2.WithSensitiveKeys(keys...))), nil
 		}},
-		{"redactlog", func(w io.Writer, strip bool) (*slog.Logger, error) {
+		{name: "redactlog", buildKeys: func(w io.Writer, keys []string) (*slog.Logger, error) {
 			cfg := redactlog.Config{
-				Logger:      slog.New(slog.NewJSONHandler(w, jsonOpts(strip, nil))),
-				RedactPaths: sensitiveKeys,
+				Logger:      slog.New(slog.NewJSONHandler(w, nil)),
+				RedactPaths: keys,
 			}
 			h, err := cfg.Build()
 			if err != nil {
@@ -102,31 +86,29 @@ func libraries() []lib {
 			}
 			return slog.New(h), nil
 		}},
-		{"alesr/redact", func(w io.Writer, strip bool) (*slog.Logger, error) {
+		{name: "alesr/redact", buildKeys: func(w io.Writer, keys []string) (*slog.Logger, error) {
 			p := redact.NewRedactionPipeline()
-			for _, k := range sensitiveKeys {
+			for _, k := range keys {
 				p.AddRedactField(k)
 			}
 			return slog.New(redact.NewRedactionHandler(
-				slog.NewJSONHandler(w, jsonOpts(strip, nil)), p)), nil
+				slog.NewJSONHandler(w, nil), p)), nil
 		}},
-		{"sensitive", func(w io.Writer, strip bool) (*slog.Logger, error) {
+		{name: "sensitive", buildKeys: func(w io.Writer, keys []string) (*slog.Logger, error) {
 			if err := sensitive.AddWithConfig(sensitive.StrategyFullRedact,
-				sensitive.MaskOptions{}, sensitiveKeys...); err != nil {
+				sensitive.MaskOptions{}, keys...); err != nil {
 				return nil, err
 			}
 			// sensitive has no slog integration of its own; a ReplaceAttr hook
 			// calling RedactIfSensitive is the intended wiring.
-			return slog.New(slog.NewJSONHandler(w, jsonOpts(strip,
-				func(_ []string, a slog.Attr) slog.Attr {
+			return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
+				ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 					if a.Value.Kind() != slog.KindString {
 						return a
 					}
 					return slog.String(a.Key, sensitive.RedactIfSensitive(a.Key, a.Value.String()))
-				}))), nil
-		}},
-		{"bare", func(w io.Writer, strip bool) (*slog.Logger, error) {
-			return slog.New(slog.NewJSONHandler(w, jsonOpts(strip, nil))), nil
+				},
+			})), nil
 		}},
 	}
 }
@@ -140,7 +122,7 @@ func TestEveryLibraryMasks(t *testing.T) {
 		}
 		t.Run(l.name, func(t *testing.T) {
 			var b bytes.Buffer
-			logger, err := l.build(&b, false)
+			logger, err := l.buildKeys(&b, sensitiveKeys)
 			if err != nil {
 				t.Fatalf("configuring %s: %v", l.name, err)
 			}
@@ -149,7 +131,6 @@ func TestEveryLibraryMasks(t *testing.T) {
 			if bytes.Contains(b.Bytes(), []byte("hunter2")) {
 				t.Errorf("%s did not mask the password: %s", l.name, b.String())
 			}
-			t.Logf("%s: %s", l.name, b.String())
 		})
 	}
 }
@@ -158,17 +139,17 @@ func TestEveryLibraryMasks(t *testing.T) {
 // never going to leak. This is the common case, and it is measured with the built-in
 // time attribute in place as it is in production.
 func BenchmarkCleanRecord(b *testing.B) {
-	benchRecords(b, cleanRecord)
+	benchRecord(b, cleanRecord, sensitiveKeys)
 }
 
 // A record with one sensitive value, which is the case the libraries exist for.
 func BenchmarkSecretRecord(b *testing.B) {
-	benchRecords(b, secretRecord)
+	benchRecord(b, secretRecord, sensitiveKeys)
 }
 
-func benchRecords(b *testing.B, args []any) {
+func benchRecord(b *testing.B, args []any, keys []string) {
 	for _, l := range libraries() {
-		logger, err := l.build(io.Discard, false)
+		logger, err := l.buildKeys(io.Discard, keys)
 		if err != nil {
 			b.Fatalf("configuring %s: %v", l.name, err)
 		}
