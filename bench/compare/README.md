@@ -59,6 +59,7 @@ them. The numbers move a few percent between runs; the allocation counts do not.
 ### Baseline, clean record — nothing matched
 
 | Library | Cost | Over bare | Allocations |
+| --- | --- | --- | --- |
 | `bare` | 561 ns | — | 0 |
 | `go-slog-redact` | 708 ns | +147 | 0 |
 | `redactlog` | 728 ns | +167 | 0 |
@@ -71,6 +72,7 @@ them. The numbers move a few percent between runs; the allocation counts do not.
 ### Baseline, secret record — one key rule fired
 
 | Library | Cost | Over bare | Allocations |
+| --- | --- | --- | --- |
 | `bare` | 488 ns | — | 0 |
 | `go-slog-redact` | 634 ns | +146 | 0 |
 | `redactlog` | 638 ns | +150 | 0 |
@@ -87,6 +89,7 @@ them. The numbers move a few percent between runs; the allocation counts do not.
 Every library configured with the same two keys, `user_email` and `client_ip`.
 
 | Library | Cost | Over bare | Allocations |
+| --- | --- | --- | --- |
 | `bare` | 945 ns | — | 1 |
 | `go-slog-redact` | 1371 ns | +426 | 4 |
 | `redactlog` | 1420 ns | +475 | 4 |
@@ -107,6 +110,7 @@ so the comparison is about finding a card and not about naming a field. Three pa
 excluded rather than configured for something they cannot do.
 
 | Library | Cost | Over bare | Allocations |
+| --- | --- | --- | --- |
 | `bare` | 749 ns | — | 1 |
 | `redactlog` | 2318 ns | +1569 | 18 |
 | `cloak` | 1414 ns | +665 | 8 |
@@ -140,6 +144,7 @@ number arrives.
 The keys from the first scenario are still installed.
 
 | Library | Cost | Over bare | Allocations |
+| --- | --- | --- | --- |
 | `bare` | 839 ns | — | 1 |
 | `go-slog-redact` | 1272 ns | +433 | 4 |
 | `redactlog` | 1300 ns | +461 | 4 |
@@ -167,6 +172,7 @@ capability from naming a key. cloak gets `WithStructScan()` plus the same key ru
 masq gets `WithFieldName`.
 
 | Library | Cost | Over bare | Allocations |
+| --- | --- | --- | --- |
 | `bare` | 1006 ns | — | 1 |
 | `cloak` | 1754 ns | +748 | 5 |
 | `masq+allowed-time` | 3424 ns | +2418 | 63 |
