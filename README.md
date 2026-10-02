@@ -2,7 +2,7 @@
 
 [![lint](https://github.com/lrweck/cloak/actions/workflows/lint.yml/badge.svg)](https://github.com/lrweck/cloak/actions/workflows/lint.yml)
 [![test](https://github.com/lrweck/cloak/actions/workflows/test.yml/badge.svg)](https://github.com/lrweck/cloak/actions/workflows/test.yml)
-[![coverage](https://img.shields.io/badge/coverage-93.4%25-c7f9a2)](#testing)
+[![coverage](https://img.shields.io/badge/coverage-93.5%25-c7f9a2)](#testing)
 [![Go Reference](https://pkg.go.dev/badge/github.com/lrweck/cloak.svg)](https://pkg.go.dev/github.com/lrweck/cloak)
 [![Go](https://img.shields.io/badge/go-1.27%2B-007d9c)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
