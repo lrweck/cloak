@@ -232,6 +232,11 @@ func (c *config) maskerForKey(raw string) (Masker, bool) {
 		if m, ok := c.keys[raw]; ok {
 			return m, true
 		}
+		// No pattern rules and no secrets to look for, there is nothing left for
+		// maskerForPattern to do. Entering it costs two empty range setups per miss.
+		if len(c.regexKeys) == 0 && len(c.contains) == 0 {
+			return nil, false
+		}
 		return c.maskerForPattern(raw, raw)
 	}
 	// A name needing a fold cannot equal a registered key as written, since those

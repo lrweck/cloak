@@ -989,8 +989,10 @@ func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 		if h.cfg.skipKey(a.Key) {
 			break
 		}
-		if nv, ok := h.valueRule(v); ok {
-			return slog.Attr{Key: a.Key, Value: nv}, true
+		if len(h.cfg.rules) > 0 {
+			if nv, ok := h.valueRule(v); ok {
+				return slog.Attr{Key: a.Key, Value: nv}, true
+			}
 		}
 	}
 	switch v.Kind() {
@@ -1024,6 +1026,9 @@ func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 }
 
 func (h *Handler) maskString(s string) (string, bool) {
+	if len(h.cfg.values) == 0 {
+		return s, false
+	}
 	changed := false
 	for _, f := range h.cfg.values {
 		ns, ok := f(s)
