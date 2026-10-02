@@ -156,7 +156,10 @@ func (h *Handler) walkValue(v slog.Value, depth int) (any, bool) {
 // tag is the field's struct tag value under the configured tag key, empty when the
 // field carries none.
 func (h *Handler) walkField(name, tag string, v slog.Value, depth int) (slog.Value, bool) {
-	if m, ok := h.cfg.maskerFor(normalizeKey(name)); ok {
+	// Normalized once and reused: three lookups would otherwise rebuild it three
+	// times for every field that reaches this point.
+	key := normalizeKey(name)
+	if m, ok := h.cfg.maskerForKey(name, key); ok {
 		return m(v.Resolve()), true
 	}
 	if m, ok := h.cfg.maskerForTag(tag); ok {
@@ -165,7 +168,7 @@ func (h *Handler) walkField(name, tag string, v slog.Value, depth int) (slog.Val
 	if m, ok := h.cfg.maskerForType(v); ok {
 		return m(v.Resolve()), true
 	}
-	if _, skip := h.cfg.skip[normalizeKey(name)]; skip {
+	if _, skip := h.cfg.skip[key]; skip {
 		return v, false
 	}
 	out, changed := h.walkValue(v, depth+1)
@@ -312,7 +315,8 @@ func (h *Handler) mapKeyMasker(key reflect.Value) (Masker, bool) {
 	if key.Kind() != reflect.String {
 		return nil, false
 	}
-	return h.cfg.maskerFor(normalizeKey(key.String()))
+	name := key.String()
+	return h.cfg.maskerForKey(name, normalizeKey(name))
 }
 
 // loose returns the masked value when there is one, and the original otherwise.

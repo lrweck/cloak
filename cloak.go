@@ -97,6 +97,8 @@ type config struct {
 	// typeMasks match a value by its Go type, which is decided at compile time by
 	// the type itself rather than by a name someone has to remember.
 	typeMasks map[reflect.Type]Masker
+	// regexKeys are key patterns, resolved at configuration time.
+	regexKeys []regexKey
 }
 
 type tagMask struct {
@@ -276,19 +278,6 @@ func (c *config) tagValue(f reflect.StructField) string {
 // state kept by a web framework.
 func WithContextAttrs(pulls ...func(context.Context) []slog.Attr) Option {
 	return func(c *config) { c.ctxPulls = append(c.ctxPulls, pulls...) }
-}
-
-// maskerFor returns the rule matching a normalized key, if any.
-func (c *config) maskerFor(key string) (Masker, bool) {
-	if m, ok := c.keys[key]; ok {
-		return m, true
-	}
-	for _, r := range c.contains {
-		if strings.Contains(key, r.part) {
-			return r.masker, true
-		}
-	}
-	return nil, false
 }
 
 func normalizeKey(s string) string {
@@ -606,7 +595,7 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 	v := a.Value.Resolve()
 	key := normalizeKey(a.Key)
-	if m, ok := h.cfg.maskerFor(key); ok {
+	if m, ok := h.cfg.maskerForKey(a.Key, key); ok {
 		return slog.Attr{Key: a.Key, Value: m(v)}, true
 	}
 	if m, ok := h.cfg.maskerForType(v); ok {
