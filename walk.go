@@ -130,6 +130,46 @@ func (h *Handler) walk(x any, depth int) (any, bool) {
 	return x, false
 }
 
+// plainString is the predeclared string type. It matters because it is the one string
+// slog reports as KindString, which is what lets walkElem hand a value to the rules
+// without boxing it into an any first. A named string type would arrive as KindAny and
+// has to go the ordinary way.
+var plainString = reflect.TypeFor[string]()
+
+// walkElem masks a container element straight from reflection, at the depth it sits.
+//
+// A plain string is the common case for both a map value and a slice element, and
+// boxing one into an any only so walk can read it back out is an allocation per
+// element — on the path where nothing matched, which is most elements. Everything else
+// defers to walk, so this is the same decision order with the boxing removed, not a
+// second implementation of the masking.
+func (h *Handler) walkElem(v reflect.Value, depth int) (any, bool) {
+	if v.Kind() != reflect.String || v.Type() != plainString {
+		return h.walk(v.Interface(), depth)
+	}
+	walkCalls++
+	if depth > maxWalkDepth {
+		return v.String(), false
+	}
+	// walk's order for a plain string: a LogValuer is impossible, so value rules, then
+	// type rules, then the detectors.
+	s := v.String()
+	if len(h.cfg.rules) > 0 {
+		if out, ok := h.valueRule(slog.StringValue(s)); ok {
+			return out, true
+		}
+	}
+	if len(h.cfg.typeMasks) > 0 {
+		if m, ok := h.cfg.typeMasks[plainString]; ok {
+			return m(slog.StringValue(s)), true
+		}
+	}
+	if out, ok := h.maskString(s); ok {
+		return out, true
+	}
+	return nil, false
+}
+
 // walkValue handles an already-resolved [slog.Value], so a LogValuer result is masked
 // by the same path as a literal.
 //
@@ -357,13 +397,21 @@ func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 	if v.IsNil() {
 		return v.Interface(), false
 	}
+	// Both stay eager, unlike the struct's copy and group. A map cannot defer its
+	// rebuild: entries are unordered, so a copy taken at the first change cannot
+	// tell which entries the loop has already rewritten and which it has not, and
+	// re-inserting an original key alongside its masked twin is a leak rather than a
+	// duplicate. The string-keyed fallback cannot be rebuilt from the result either,
+	// since fmt.Sprint of a converted non-string key renders differently.
 	dst := reflect.MakeMapWithSize(v.Type(), v.Len())
 	wide := make(map[string]any, v.Len())
 	changed, shaped := false, true
-	// reflect.Value.Seq2, so map entries arrive through the range-over-func
-	// protocol rather than a manual MapRange loop.
-	for key, value := range v.Seq2() {
-		maskedKey, kc := h.walk(key.Interface(), depth+1)
+	// MapRange rather than Seq2. The range-over-func iterator allocates twice per
+	// entry on top of the two boxes Interface needs, and this path runs for every
+	// entry of every map walked.
+	for it := v.MapRange(); it.Next(); {
+		key, value := it.Key(), it.Value()
+		maskedKey, kc := h.walkElem(key, depth+1)
 
 		// The key rule first, exactly as walkField does for a struct field, and
 		// for the same reason: the name is the most specific statement of intent,
@@ -383,11 +431,11 @@ func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 		case key.Kind() == reflect.String && h.cfg.skipKey(key.String()):
 			// The name was excluded from the value scan, as in walkField. The
 			// order matches too: an explicit rule beats the skip list, so only an
-			// entry no rule claimed is left alone here.
-			maskedValue = value.Interface()
+			// entry no rule claimed is left alone here. Nothing is boxed: the
+			// original is taken from value below on the unchanged path.
 		default:
 			// No name for the entry, so the value detectors and rules decide.
-			maskedValue, vc = h.walk(value.Interface(), depth+1)
+			maskedValue, vc = h.walkElem(value, depth+1)
 		}
 
 		kv := key
@@ -414,10 +462,14 @@ func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 		if shaped || !kc {
 			dst.SetMapIndex(kv, vv)
 		}
+		wideKey := key.String()
 		if kc {
-			wide[fmt.Sprint(maskedKey)] = loose(maskedValue, vc, vv.Interface())
+			wideKey = fmt.Sprint(maskedKey)
+		}
+		if vc {
+			wide[wideKey] = maskedValue
 		} else {
-			wide[key.String()] = loose(maskedValue, vc, vv.Interface())
+			wide[wideKey] = vv.Interface()
 		}
 	}
 	if !changed {
@@ -438,46 +490,62 @@ func (h *Handler) mapKeyMasker(key reflect.Value) (Masker, bool) {
 	return h.cfg.maskerForKey(key.String())
 }
 
-// loose returns the masked value when there is one, and the original otherwise.
-func loose(masked any, wasChanged bool, original any) any {
-	if wasChanged {
-		return masked
-	}
-	return original
-}
-
 // walkSlice masks each element, recursing so nested slices and slices of pointers
 // work too.
+//
+// As in walkStruct, the rebuilt slice and the any-typed fallback are built on demand:
+// a slice where nothing matched must not pay for either, which is most slices.
 func (h *Handler) walkSlice(v reflect.Value, depth int) (any, bool) {
 	if v.IsNil() {
 		return v.Interface(), false
 	}
-	dst := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
-	wide := make([]any, v.Len())
+	var dst reflect.Value
+	var wide []any
 	changed, shaped := false, true
+	elemType := v.Type().Elem()
 	// The integer range, since Seq yields elements without their index and dst.Index
 	// needs one.
 	for i := range v.Len() {
 		elem := v.Index(i)
-		// Boxed once: wide reuses the same any walk consumed.
-		ei := elem.Interface()
-		out, c := h.walk(ei, depth+1)
-		wide[i] = loose(out, c, ei)
+		out, c := h.walkElem(elem, depth+1)
 
 		if !c {
-			dst.Index(i).Set(elem)
+			// Unchanged. dst carries the copy only if it exists yet; sliceCopy
+			// filled in whatever came earlier.
+			if dst.IsValid() {
+				dst.Index(i).Set(elem)
+			}
+			if wide != nil {
+				wide[i] = elem.Interface()
+			}
 			continue
 		}
 		changed = true
-		if cv := convert(out, v.Type().Elem()); cv.IsValid() {
-			dst.Index(i).Set(cv)
-			continue
+		if !dst.IsValid() {
+			dst = sliceCopy(v, i)
 		}
-		// The element type cannot hold what masking produced — a []LogValuer,
-		// for instance. Keeping the original would leak, so widen the slice
-		// instead and let the field type follow.
-		shaped = false
-		dst.Index(i).Set(elem)
+		if cv := convert(out, elemType); cv.IsValid() {
+			dst.Index(i).Set(cv)
+		} else {
+			// The element type cannot hold what masking produced — a []LogValuer,
+			// for instance. Keeping the original would leak, so widen the slice
+			// instead and let the field type follow.
+			shaped = false
+			dst.Index(i).Set(elem)
+		}
+		if !shaped && wide == nil {
+			// The prefix is taken from dst, which holds the right value for every
+			// index below i: the shape cannot have survived past the first element
+			// that did not fit.
+			wide = make([]any, v.Len())
+			for j := range i {
+				wide[j] = dst.Index(j).Interface()
+			}
+		}
+		if wide != nil {
+			// c is true here, so the masked value is the one to keep.
+			wide[i] = out
+		}
 	}
 	if !changed {
 		return v.Interface(), false
@@ -486,6 +554,14 @@ func (h *Handler) walkSlice(v reflect.Value, depth int) (any, bool) {
 		return wide, true
 	}
 	return dst.Interface(), true
+}
+
+// sliceCopy returns a slice of v's type with elements [0,i) copied, so a rebuild that
+// starts at i inherits the elements it has not rewritten.
+func sliceCopy(v reflect.Value, i int) reflect.Value {
+	dst := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+	reflect.Copy(dst.Slice(0, i), v.Slice(0, i))
+	return dst
 }
 
 // maskInto stores a masked value into a field of the declared type, reporting whether

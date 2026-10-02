@@ -28,18 +28,18 @@ bare handler and through cloak; the delta is the masking.
 
 | Scenario | bare slog | with cloak | delta | what it exercises |
 | --- | --- | --- | --- | --- |
-| `no_pii_text` | 527 ns, 0 allocs | 622 ns, 0 allocs | **+95 ns** | nothing matched |
-| `key_only_no_detectors` | 469 ns, 0 allocs | 690 ns, 0 allocs | +221 ns | 102 key rules, no format scan |
-| `key_rule_fires` | 424 ns, 0 allocs | 568 ns, 0 allocs | +144 ns | one key rule redacting |
-| `detector_fires` | 418 ns, 0 allocs | 831 ns, 2 allocs | +413 ns | the email detector matching |
-| `preset_mixed_record` | 659 ns, 0 allocs | 975 ns, 0 allocs | +316 ns | keys and detectors together |
-| `preset_wide_record` | 1557 ns, 1 alloc | 2819 ns, 2 allocs | +1262 ns | 20 attributes, mostly unmatched |
-| `groups_nested` | 722 ns, 0 allocs | 1153 ns, 4 allocs | +431 ns | two nested groups |
-| `struct_walk` | 789 ns, 1 alloc | 1572 ns, 6 allocs | +783 ns | `slog.Any` with a struct |
-| `map_walk` | 1305 ns, 10 allocs | 2676 ns, 27 allocs | +1371 ns | `slog.Any` with a map |
-| `slice_walk` | 703 ns, 1 alloc | 2110 ns, 19 allocs | +1407 ns | `slog.Any` with a slice |
-| `message_scan` | 424 ns, 0 allocs | 934 ns, 2 allocs | +510 ns | an email inside the message |
-| `context_attrs` | 461 ns, 0 allocs | 1647 ns, 8 allocs | +1186 ns | a masked pull on every record |
+| `no_pii_text` | 520 ns, 0 allocs | 620 ns, 0 allocs | **+100 ns** | nothing matched |
+| `key_only_no_detectors` | 469 ns, 0 allocs | 692 ns, 0 allocs | +223 ns | 102 key rules, no format scan |
+| `key_rule_fires` | 418 ns, 0 allocs | 564 ns, 0 allocs | +146 ns | one key rule redacting |
+| `detector_fires` | 412 ns, 0 allocs | 828 ns, 2 allocs | +416 ns | the email detector matching |
+| `preset_mixed_record` | 651 ns, 0 allocs | 970 ns, 0 allocs | +319 ns | keys and detectors together |
+| `preset_wide_record` | 1562 ns, 1 alloc | 2793 ns, 2 allocs | +1231 ns | 20 attributes, mostly unmatched |
+| `groups_nested` | 715 ns, 0 allocs | 1149 ns, 4 allocs | +434 ns | two nested groups |
+| `struct_walk` | 785 ns, 1 alloc | 1549 ns, 6 allocs | +764 ns | `slog.Any` with a struct |
+| `map_walk` | 1319 ns, 10 allocs | 2582 ns, 23 allocs | +1263 ns | `slog.Any` with a map |
+| `slice_walk` | 691 ns, 1 alloc | 2121 ns, 17 allocs | +1430 ns | `slog.Any` with a slice |
+| `message_scan` | 421 ns, 0 allocs | 934 ns, 2 allocs | +513 ns | an email inside the message |
+| `context_attrs` | 449 ns, 0 allocs | 1645 ns, 8 allocs | +1196 ns | a masked pull on every record |
 
 ### What the numbers say
 
@@ -93,10 +93,20 @@ the logging path at all (`TestReadmeCompositeOptionsAreOptIn` and `walkCalls` pi
 that). Note the bare column for `map_walk`: 10 of the 27 allocations belong to the
 JSON sink marshaling the map, not to the masking.
 
-**Maps and slices still rebuild eagerly.** `walkMap` and `walkSlice` allocate the
-rebuilt container and the wide fallback before knowing whether anything matched, which
-is why their passthrough cost still grows with the entry count while the struct's does
-not. Same fix, not yet applied.
+**A slice where nothing matched is free too.** The rebuilt slice and the widened
+fallback are both built on demand, and a plain string element is masked straight from
+reflection instead of being boxed into an any only to be read back out. A twenty-element
+slice of unmatched strings costs nothing over the bare handler.
+
+**Maps still rebuild eagerly.** `walkMap` cannot defer its copy the way the struct and
+the slice do: map entries are unordered, so a copy taken at the first change cannot tell
+which entries the loop has already rewritten, and re-inserting an original key next to
+its masked twin leaks rather than duplicates. The string-keyed fallback cannot be
+rebuilt from the result either, since a converted non-string key renders differently.
+Reverting the attempt failed `TestMapWithStructKey`. What maps do get is `MapRange` in
+place of `Seq2`: the range-over-func iterator allocates twice per entry on top of the
+two boxes `Interface` needs, which took a two-entry passthrough from 12 allocations to
+8.
 
 ## Scaling with record width
 
