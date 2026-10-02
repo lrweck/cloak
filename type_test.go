@@ -15,7 +15,7 @@ type (
 	apiToken  string
 )
 
-func logAny(opts []cloak.Option, attr slog.Attr) string {
+func logAny(opts []cloak.Options, attr slog.Attr) string {
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
 	logger.Info("m", attr)
@@ -23,7 +23,7 @@ func logAny(opts []cloak.Option, attr slog.Attr) string {
 }
 
 func TestTypeMasksAttribute(t *testing.T) {
-	got := logAny([]cloak.Option{cloak.WithType[emailAddr]()},
+	got := logAny([]cloak.Options{cloak.WithType[emailAddr]()},
 		slog.Any("mail", emailAddr("john@example.com")))
 	if strings.Contains(got, "john@example.com") {
 		t.Errorf("typed value leaked: %s", got)
@@ -36,7 +36,7 @@ func TestTypeMasksAttribute(t *testing.T) {
 // A named string type is not KindString to slog, so the value detectors cannot see it.
 // That is exactly why a type rule is worth having.
 func TestTypeReachesWhatDetectorsCannot(t *testing.T) {
-	got := logAny([]cloak.Option{
+	got := logAny([]cloak.Options{
 		cloak.WithDefaultPIIValues(),
 		cloak.WithType[emailAddr](),
 	}, slog.Any("mail", emailAddr("john@example.com")))
@@ -48,7 +48,7 @@ func TestTypeReachesWhatDetectorsCannot(t *testing.T) {
 
 // An ordinary string of the same content is left alone: the rule is about the type.
 func TestTypeDoesNotMatchPlainString(t *testing.T) {
-	got := logAny([]cloak.Option{cloak.WithType[emailAddr]()},
+	got := logAny([]cloak.Options{cloak.WithType[emailAddr]()},
 		slog.String("note", "john@example.com"))
 	if !strings.Contains(got, "john@example.com") {
 		t.Fatalf("a plain string must survive: %s", got)
@@ -56,7 +56,7 @@ func TestTypeDoesNotMatchPlainString(t *testing.T) {
 }
 
 func TestTypeCustomMasker(t *testing.T) {
-	got := logAny([]cloak.Option{cloak.WithType[password](cloak.KeepFirst(2))},
+	got := logAny([]cloak.Options{cloak.WithType[password](cloak.KeepFirst(2))},
 		slog.Any("pw", password("hunter2")))
 	if !strings.Contains(got, "hu*****") {
 		t.Errorf("expected KeepFirst(2): %s", got)
@@ -101,7 +101,7 @@ func TestTypeInsideSliceAndMap(t *testing.T) {
 
 // An explicit key rule is more specific, so it wins.
 func TestTypePrecedenceAgainstKeyRule(t *testing.T) {
-	got := logAny([]cloak.Option{
+	got := logAny([]cloak.Options{
 		cloak.WithType[password](),
 		cloak.WithKey(cloak.KeepLast(2), "pw"),
 	}, slog.Any("pw", password("hunter2")))
@@ -113,7 +113,7 @@ func TestTypePrecedenceAgainstKeyRule(t *testing.T) {
 // A LogValuer is resolved before its type is checked, so the type that gets masked is
 // the one that would have been logged.
 func TestTypeResolvesLogValuerFirst(t *testing.T) {
-	got := logAny([]cloak.Option{cloak.WithType[secret]()},
+	got := logAny([]cloak.Options{cloak.WithType[secret]()},
 		slog.Any("v", typedLogValuer{secret("hunter2")}))
 	if strings.Contains(got, "hunter2") {
 		t.Errorf("LogValue output leaked: %s", got)
@@ -128,7 +128,7 @@ func (t typedLogValuer) LogValue() slog.Value { return slog.AnyValue(t.v) }
 
 // Registering a type twice keeps the last rule, matching WithKey.
 func TestTypeLastRuleWins(t *testing.T) {
-	got := logAny([]cloak.Option{
+	got := logAny([]cloak.Options{
 		cloak.WithType[password](),
 		cloak.WithType[password](cloak.KeepFirst(2)),
 	}, slog.Any("pw", password("hunter2")))
@@ -140,7 +140,7 @@ func TestTypeLastRuleWins(t *testing.T) {
 // No type rules configured means the type means nothing. The attribute name is
 // deliberately outside the default key list so only the type rule could mask it.
 func TestTypeUnconfiguredIsInert(t *testing.T) {
-	got := logAny([]cloak.Option{cloak.WithDefaultPII()},
+	got := logAny([]cloak.Options{cloak.WithDefaultPII()},
 		slog.Any("note", emailAddr("keep-me@example.com")))
 	if !strings.Contains(got, "keep-me@example.com") {
 		t.Fatalf("an unregistered type must survive: %s", got)

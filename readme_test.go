@@ -153,18 +153,18 @@ func TestReadmeLogValuerPrecedence(t *testing.T) {
 func TestReadmeCompositeOptionsAreOptIn(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		opts []cloak.Option
+		opts []cloak.Options
 		val  any
 	}{
-		{"struct", []cloak.Option{cloak.WithStructScan()}, readmeAccount{Email: "john@example.com"}},
-		{"map", []cloak.Option{cloak.WithMapScan()}, map[string]any{"contact": "john@example.com"}},
-		{"slice", []cloak.Option{cloak.WithSliceScan()}, []string{"john@example.com"}},
-		{"composite", []cloak.Option{cloak.WithCompositeScan()}, readmeAccount{Email: "john@example.com"}},
+		{"struct", []cloak.Options{cloak.WithStructScan()}, readmeAccount{Email: "john@example.com"}},
+		{"map", []cloak.Options{cloak.WithMapScan()}, map[string]any{"contact": "john@example.com"}},
+		{"slice", []cloak.Options{cloak.WithSliceScan()}, []string{"john@example.com"}},
+		{"composite", []cloak.Options{cloak.WithCompositeScan()}, readmeAccount{Email: "john@example.com"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var b bytes.Buffer
 			logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
-				append([]cloak.Option{cloak.WithDefaultPII()}, tc.opts...)...))
+				append([]cloak.Options{cloak.WithDefaultPII()}, tc.opts...)...))
 			logger.Info("m", "v", tc.val)
 			if strings.Contains(b.String(), "john@example.com") {
 				t.Fatalf("%s should have masked its shape: %s", tc.name, b.String())
@@ -368,7 +368,7 @@ func TestReadmeKeyRegex(t *testing.T) {
 func TestReadmeConstructors(t *testing.T) {
 	cases := []struct {
 		name   string
-		build  func(slog.Handler, ...cloak.Option) slog.Handler
+		build  func(slog.Handler, ...cloak.Options) slog.Handler
 		attr   slog.Attr
 		leaked string
 	}{
@@ -407,5 +407,34 @@ func TestReadmeValueRule(t *testing.T) {
 	}
 	if !strings.Contains(got, "1299") {
 		t.Fatalf("small int must survive: %s", got)
+	}
+}
+
+// The README claims the redacted message is the handler's, whatever asked for it.
+func TestReadmeRedactedValue(t *testing.T) {
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
+		cloak.WithDefaultPII(), cloak.WithRedactedValue("***")))
+	logger.Info("m", "password", "hunter2")
+
+	got := b.String()
+	if strings.Contains(got, "***") == false {
+		t.Fatalf("expected the custom message: %s", got)
+	}
+	if strings.Contains(got, cloak.Placeholder) {
+		t.Fatalf("the default message leaked through: %s", got)
+	}
+}
+
+// The README claims JoinOptions gives a policy one storable value.
+func TestReadmeJoinOptions(t *testing.T) {
+	var MinhaPolitica = cloak.JoinOptions(cloak.WithDefaultPIIKeys(), cloak.WithMapScan())
+
+	var b bytes.Buffer
+	slog.New(cloak.New(slog.NewTextHandler(&b, nil), MinhaPolitica)).
+		Info("m", slog.Any("m", map[string]string{"password": "hunter2"}))
+
+	if strings.Contains(b.String(), "hunter2") {
+		t.Fatalf("joined options did not apply: %s", b.String())
 	}
 }

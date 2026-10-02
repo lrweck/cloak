@@ -17,15 +17,15 @@ type tagged struct {
 	Other    string `json:"other"`
 }
 
-func logTagged(opts []cloak.Option, v any) string {
+func logTagged(opts []cloak.Options, v any) string {
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
 	logger.Info("m", "v", v)
 	return b.String()
 }
 
-func withTags(extra ...cloak.Option) []cloak.Option {
-	return append([]cloak.Option{
+func withTags(extra ...cloak.Options) []cloak.Options {
+	return append([]cloak.Options{
 		cloak.WithStructScan(),
 		cloak.WithTag("cloak", "secret", cloak.Redact),
 		cloak.WithTag("cloak", "pii", cloak.KeepFirst(1)),
@@ -69,7 +69,7 @@ func TestTagKeyIsHonoured(t *testing.T) {
 	type doc struct {
 		Secret string `json:"secret"`
 	}
-	got := logTagged([]cloak.Option{
+	got := logTagged([]cloak.Options{
 		cloak.WithStructScan(),
 		cloak.WithTag("json", "secret", cloak.Redact),
 	}, doc{Secret: "hunter2"})
@@ -78,7 +78,7 @@ func TestTagKeyIsHonoured(t *testing.T) {
 	}
 
 	// The same value under a key nobody watches stays.
-	got = logTagged([]cloak.Option{cloak.WithStructScan()}, doc{Secret: "hunter2"})
+	got = logTagged([]cloak.Options{cloak.WithStructScan()}, doc{Secret: "hunter2"})
 	if !strings.Contains(got, "hunter2") {
 		t.Errorf("without a rule the field must survive: %s", got)
 	}
@@ -86,7 +86,7 @@ func TestTagKeyIsHonoured(t *testing.T) {
 
 // A tag the walk never watches is inert.
 func TestTagUnrelatedKeyIgnored(t *testing.T) {
-	got := logTagged([]cloak.Option{
+	got := logTagged([]cloak.Options{
 		cloak.WithStructScan(),
 		cloak.WithTag("cloak", "secret", cloak.Redact),
 	}, tagged{Other: "visible"})
@@ -100,7 +100,7 @@ func TestTagPrecedenceAgainstKeyRule(t *testing.T) {
 	type both struct {
 		Password string `cloak:"secret"`
 	}
-	got := logTagged([]cloak.Option{
+	got := logTagged([]cloak.Options{
 		cloak.WithStructScan(),
 		cloak.WithTag("cloak", "secret", cloak.Redact),
 		cloak.WithKey(cloak.KeepLast(3), "Password"),

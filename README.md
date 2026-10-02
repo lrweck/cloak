@@ -332,6 +332,7 @@ never evaluates `LogValue()` again.
 
 | Option | Effect |
 | --- | --- |
+| `WithRedactedValue(msg)` | What a full redaction is replaced with |
 | `WithKey(mask, keys...)` | Mask whole-key matches |
 | `WithKeyContains(mask, keys...)` | Mask substring matches |
 | `WithKeyRegex(pattern, mask)` | Mask keys matching a pattern |
@@ -358,6 +359,39 @@ never evaluates `LogValue()` again.
 
 For custom detectors, order your own `WithValueFunc` list the same way: cheapest gate
 first, and put any loose heuristic last.
+
+### The redaction message
+
+The replacement for a fully redacted value belongs to the handler, not to any rule:
+
+```go
+cloak.NewPCI(next, cloak.WithRedactedValue("***"))
+// pan=***, cvv=***
+```
+
+Whatever asks for the redaction gets the same string: a key rule, a tag, a type, a
+pattern, `WithContain`, or one of the presets. Partial maskers keep their own output,
+since `KeepLast` and friends state exactly what they produce. Order does not matter,
+so the message may be set before or after the rules that use it.
+
+### Composing options
+
+`Options` follows the shape `encoding/json/v2` uses: opaque, and one value carries
+either a single option or a set of them.
+
+```go
+// one option
+opt := cloak.WithDefaultPII()
+
+// a set, which can be named, stored and passed around
+var MinhaPolitica = cloak.JoinOptions(opt, cloak.WithMessageScan(), cloak.WithStructScan())
+
+cloak.New(next, MinhaPolitica)
+```
+
+That is what a slice of options cannot do: a policy you want to name is a value, not a
+function that returns one. Later options override earlier ones, as everywhere else
+here.
 
 ### Masking by Go type
 

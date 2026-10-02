@@ -17,30 +17,30 @@ func TestKeyRuleReachesEveryContainer(t *testing.T) {
 	cases := []struct {
 		name string
 		attr slog.Attr
-		opts []cloak.Option
+		opts []cloak.Options
 	}{
 		{"attribute", slog.String("password", "hunter2"), nil},
 		{"group", slog.Group("g", slog.String("password", "hunter2")), nil},
 		{"struct field", slog.Any("a", struct{ Password string }{Password: "hunter2"}),
-			[]cloak.Option{cloak.WithStructScan()}},
+			[]cloak.Options{cloak.WithStructScan()}},
 		{"map key", slog.Any("m", map[string]string{"password": "hunter2"}),
-			[]cloak.Option{cloak.WithMapScan()}},
+			[]cloak.Options{cloak.WithMapScan()}},
 		{"map key, any value", slog.Any("m", map[string]any{"password": "hunter2"}),
-			[]cloak.Option{cloak.WithMapScan()}},
+			[]cloak.Options{cloak.WithMapScan()}},
 		{"map key, nested map", slog.Any("m", map[string]any{"auth": map[string]string{"password": "hunter2"}}),
-			[]cloak.Option{cloak.WithMapScan()}},
+			[]cloak.Options{cloak.WithMapScan()}},
 		{"slice of maps", slog.Any("s", []map[string]string{{"password": "hunter2"}}),
-			[]cloak.Option{cloak.WithSliceScan(), cloak.WithMapScan()}},
+			[]cloak.Options{cloak.WithSliceScan(), cloak.WithMapScan()}},
 		{"map key, slice value", slog.Any("m", map[string][]string{"password": {"hunter2"}}),
-			[]cloak.Option{cloak.WithMapScan(), cloak.WithSliceScan()}},
+			[]cloak.Options{cloak.WithMapScan(), cloak.WithSliceScan()}},
 		{"struct field holding a map", slog.Any("a", struct {
 			Auth map[string]string `json:"auth"`
 		}{Auth: map[string]string{"password": "hunter2"}}),
-			[]cloak.Option{cloak.WithStructScan(), cloak.WithMapScan()}},
+			[]cloak.Options{cloak.WithStructScan(), cloak.WithMapScan()}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := append([]cloak.Option{cloak.WithKey(cloak.Redact, "password")}, tc.opts...)
+			opts := append([]cloak.Options{cloak.WithKey(cloak.Redact, "password")}, tc.opts...)
 			var b bytes.Buffer
 			logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
 			logger.Info("m", tc.attr)

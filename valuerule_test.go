@@ -39,7 +39,7 @@ func TestValueRuleSeesEveryKind(t *testing.T) {
 }
 
 func TestValueRuleCanMaskAnyKind(t *testing.T) {
-	got := logWithOpts([]cloak.Option{
+	got := logWithOpts([]cloak.Options{
 		cloak.WithValuePredicate(
 			func(v slog.Value) bool { return v.Kind() == slog.KindInt64 },
 			cloak.Redact,
@@ -60,7 +60,7 @@ func TestValueRuleCanMaskAnyKind(t *testing.T) {
 // WithValueRule may rewrite rather than only decide, which ValueFunc can do too but
 // ValueRule does for any kind.
 func TestValueRuleRewrites(t *testing.T) {
-	got := logWithOpts([]cloak.Option{
+	got := logWithOpts([]cloak.Options{
 		cloak.WithValueRule(func(v slog.Value) (slog.Value, bool) {
 			if v.Kind() == slog.KindDuration {
 				return slog.StringValue("slow"), true
@@ -80,7 +80,7 @@ func TestValueRuleRewrites(t *testing.T) {
 // A rule must not claim a group, since replacing one discards its structure rather
 // than masking it.
 func TestValueRuleSkipsGroups(t *testing.T) {
-	got := logWithOpts([]cloak.Option{
+	got := logWithOpts([]cloak.Options{
 		cloak.WithValuePredicate(func(slog.Value) bool { return true }, cloak.Redact),
 	}, "user", slog.GroupValue(slog.String("name", "Jane"), slog.Int("id", 7)))
 
@@ -96,7 +96,7 @@ func TestValueRuleSkipsGroups(t *testing.T) {
 
 // The skip list governs rules the same as it governs detectors.
 func TestValueRuleRespectsSkip(t *testing.T) {
-	got := logWithOpts([]cloak.Option{
+	got := logWithOpts([]cloak.Options{
 		cloak.WithSkipValueScan("raw"),
 		cloak.WithValuePredicate(func(slog.Value) bool { return true }, cloak.Redact),
 	}, "raw", "verbatim", "other", "masked")
@@ -112,7 +112,7 @@ func TestValueRuleRespectsSkip(t *testing.T) {
 // Rules reach inside the composite walk: struct fields, map values, slice elements.
 func TestValueRuleReachesContainers(t *testing.T) {
 	type inner struct{ Amount int }
-	opts := []cloak.Option{
+	opts := []cloak.Options{
 		cloak.WithStructScan(), cloak.WithMapScan(), cloak.WithSliceScan(),
 		cloak.WithValuePredicate(
 			func(v slog.Value) bool { return v.Kind() == slog.KindInt64 && v.Int64() > 1_000_000 },
@@ -144,7 +144,7 @@ func TestValueRuleReachesContainers(t *testing.T) {
 // explicit rule beats an inferred mask.
 func TestValueRuleBeatsDetectorButLosesToKey(t *testing.T) {
 	// MaskEmail would turn this into j***@example.com; the rule claims it first.
-	got := logWithOpts([]cloak.Option{
+	got := logWithOpts([]cloak.Options{
 		cloak.WithDefaultPIIValues(),
 		cloak.WithValueRule(func(v slog.Value) (slog.Value, bool) {
 			if v.Kind() == slog.KindString && v.String() == "john@example.com" {
@@ -159,7 +159,7 @@ func TestValueRuleBeatsDetectorButLosesToKey(t *testing.T) {
 	}
 
 	// A key rule still wins over a value rule.
-	got = logWithOpts([]cloak.Option{
+	got = logWithOpts([]cloak.Options{
 		cloak.WithKey(cloak.KeepLast(3), "email"),
 		cloak.WithValueRule(func(v slog.Value) (slog.Value, bool) {
 			return slog.StringValue("[custom]"), true
@@ -172,7 +172,7 @@ func TestValueRuleBeatsDetectorButLosesToKey(t *testing.T) {
 }
 
 func TestValueRuleUnconfiguredIsInert(t *testing.T) {
-	got := logWithOpts([]cloak.Option{cloak.WithDefaultPII()},
+	got := logWithOpts([]cloak.Options{cloak.WithDefaultPII()},
 		"latency_ms", 12345, "enabled", true)
 	if !strings.Contains(got, "12345") {
 		t.Fatalf("no rule registered, so nothing should change: %s", got)
@@ -181,7 +181,7 @@ func TestValueRuleUnconfiguredIsInert(t *testing.T) {
 
 // Rules compose with each other: the first one that offers a replacement decides.
 func TestValueRuleFirstMatchWins(t *testing.T) {
-	got := logWithOpts([]cloak.Option{
+	got := logWithOpts([]cloak.Options{
 		cloak.WithValueRule(func(v slog.Value) (slog.Value, bool) {
 			return slog.StringValue("first"), true
 		}),
@@ -196,13 +196,7 @@ func TestValueRuleFirstMatchWins(t *testing.T) {
 }
 
 func logWithRule(r cloak.ValueRule, args ...any) string {
-	return logWithOpts([]cloak.Option{cloak.WithValueRule(r)}, args...)
-}
-
-func logWithOpts(opts []cloak.Option, args ...any) string {
-	var b bytes.Buffer
-	slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...)).Info("m", args...)
-	return b.String()
+	return logWithOpts([]cloak.Options{cloak.WithValueRule(r)}, args...)
 }
 
 func slicesContains(s []string, want string) bool {
@@ -212,4 +206,10 @@ func slicesContains(s []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func logWithOpts(opts []cloak.Options, args ...any) string {
+	var b bytes.Buffer
+	slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...)).Info("m", args...)
+	return b.String()
 }

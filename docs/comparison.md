@@ -33,6 +33,8 @@ library has no equivalent; a note means it can be done, but not first-class.
 | Redaction counters / stats | — | ✅ atomic | — | — | — | ❌ |
 | Regex over values | ✅ | — | ✅ | ✅ | — | via `WithValueFunc` |
 | **Regex over keys** | — | ✅ | — | — | — | ✅ `WithKeyRegex` |
+| Configurable redaction message | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ instance-wide |
+| Composable `Options` value | — | — | — | ✅ | — | ✅ `JoinOptions`, json/v2 shape |
 | Path DSL with wildcards (`cards[*].pan`) | — | — | ✅ | — | — | ❌ normalized keys |
 | Predicate on the raw `slog.Value`, any kind | ✅ | ✅ | — | — | — | strings only |
 | Length-preserving / partial masks | ✅ `MaskWithSymbol` | ✅ `PartialMask` | ✅ | — | ✅ | ✅ `KeepFirst`/`KeepLast`/`KeepEnds` |

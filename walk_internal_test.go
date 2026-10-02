@@ -56,7 +56,7 @@ func TestClassify(t *testing.T) {
 
 func TestOptionScoping(t *testing.T) {
 	cases := []struct {
-		opt  Option
+		opt  Options
 		name string
 		want composite
 	}{
@@ -68,7 +68,7 @@ func TestOptionScoping(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &config{keys: map[string]Masker{}, skip: map[string]struct{}{}}
-			tc.opt(c)
+			tc.opt.apply(c)
 			if c.scan != tc.want {
 				t.Errorf("scan = %d, want %d", c.scan, tc.want)
 			}
@@ -79,9 +79,9 @@ func TestOptionScoping(t *testing.T) {
 // A pointer is followed by every option, because a pointer is only an address to the
 // value behind it. Passing a struct by pointer is the common case.
 func TestPointerIsWalkedByEveryOption(t *testing.T) {
-	for _, opt := range []Option{WithStructScan(), WithMapScan(), WithSliceScan(), WithCompositeScan()} {
+	for _, opt := range []Options{WithStructScan(), WithMapScan(), WithSliceScan(), WithCompositeScan()} {
 		c := &config{keys: map[string]Masker{}, skip: map[string]struct{}{}}
-		opt(c)
+		opt.apply(c)
 		if !c.scans(&struct{ Email string }{}) {
 			t.Error("pointer attr would not be walked")
 		}
@@ -90,7 +90,7 @@ func TestPointerIsWalkedByEveryOption(t *testing.T) {
 
 func BenchmarkTypeLookupConfigured(b *testing.B) {
 	c := newConfigForBench()
-	WithType[struct{ A int }]()(c)
+	WithType[struct{ A int }]().apply(c)
 	v := slog.AnyValue(struct{ A int }{A: 1})
 	b.ReportAllocs()
 	for b.Loop() {

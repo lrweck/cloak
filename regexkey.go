@@ -136,7 +136,7 @@ func patternLiterals(pattern string) (words []string, fold, ok bool) {
 //
 // Precedence is key rule, then this, then [WithKeyContains]: an exact key is the most
 // specific statement of intent, a pattern is deliberate, and a substring is the loosest.
-func WithKeyRegex(pattern string, m Masker) Option {
+func WithKeyRegex(pattern string, m Masker) Options {
 	return WithKeyRegexp(regexp.MustCompile(pattern), m)
 }
 
@@ -148,7 +148,7 @@ func WithKeyRegex(pattern string, m Masker) Option {
 //	    return err
 //	}
 //	cloak.WithKeyRegexp(pattern, cloak.Redact)
-func WithKeyRegexp(re *regexp.Regexp, m Masker) Option {
+func WithKeyRegexp(re *regexp.Regexp, m Masker) Options {
 	// A nil regexp is the shape of a discarded compile error, and it would
 	// otherwise surface as a nil dereference inside Handle — during a log call,
 	// with no stack pointing at the mistake. Fail here instead, where the message
@@ -159,7 +159,7 @@ func WithKeyRegexp(re *regexp.Regexp, m Masker) Option {
 	// Resolved here rather than when the option is applied, so the pattern is
 	// parsed and classified exactly once, whichever constructor is used.
 	key := newRegexKey(re, m)
-	return func(c *config) { c.addRegexKey(re.String(), key) }
+	return option(func(c *config) { c.addRegexKey(re.String(), key) })
 }
 
 // addRegexKey registers a pattern rule, replacing one already registered for the same
@@ -175,6 +175,40 @@ func (c *config) addRegexKey(pattern string, key regexKey) {
 	}
 	c.regexIdx[pattern] = len(c.regexKeys)
 	c.regexKeys = append(c.regexKeys, key)
+}
+
+// finalize answers every outstanding request for a full redaction with the handler's
+// own message. It runs once, in [New], after the options are applied, so the hot path
+// pays nothing for the indirection.
+//
+// Doing it here rather than at registration is what makes the message a property of the
+// instance: an option may set it before or after the rule that asks for redaction, and
+// both orders have to end up the same.
+func (c *config) finalize() {
+	if c.redacted == "" {
+		c.redacted = Placeholder
+	}
+	fill := func(m Masker) Masker {
+		if isRedact(m) {
+			return Fixed(c.redacted)
+		}
+		return m
+	}
+	for k, m := range c.keys {
+		c.keys[k] = fill(m)
+	}
+	for k, m := range c.typeMasks {
+		c.typeMasks[k] = fill(m)
+	}
+	for i := range c.contains {
+		c.contains[i].masker = fill(c.contains[i].masker)
+	}
+	for i := range c.tagMasks {
+		c.tagMasks[i].masker = fill(c.tagMasks[i].masker)
+	}
+	for i := range c.regexKeys {
+		c.regexKeys[i].masker = fill(c.regexKeys[i].masker)
+	}
 }
 
 // maskerForKey returns the rule covering a key, given the name as written and its

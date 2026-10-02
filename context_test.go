@@ -51,7 +51,7 @@ func requestAndUserAttrs(ctx context.Context) []slog.Attr {
 	return append(requestAttrs(ctx), userAttrs(ctx)...)
 }
 
-func logCtx(opts []cloak.Option, ctx context.Context) string {
+func logCtx(opts []cloak.Options, ctx context.Context) string {
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewJSONHandler(&b, nil), opts...))
 	logger.InfoContext(ctx, "event")
@@ -61,7 +61,7 @@ func logCtx(opts []cloak.Option, ctx context.Context) string {
 // A struct attached to the context must be walked, or its fields leak wholesale.
 func TestContextStructIsWalked(t *testing.T) {
 	ctx := withUser(context.Background(), principal{ID: 7, Email: "john@example.com", CPF: "529.982.247-25"})
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithDefaultPII(),
 		cloak.WithStructScan(),
 		cloak.WithContextAttrs(userAttrs),
@@ -81,7 +81,7 @@ func TestContextStructIsWalked(t *testing.T) {
 // explicit rather than discovered at a review.
 func TestContextStructNeedsCompositeScan(t *testing.T) {
 	ctx := withUser(context.Background(), principal{Email: "john@example.com"})
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithDefaultPII(),
 		cloak.WithContextAttrs(userAttrs),
 	}, ctx)
@@ -99,7 +99,7 @@ func mailAttrs(ctx context.Context) []slog.Attr {
 
 func TestContextStringIsMasked(t *testing.T) {
 	ctx := context.WithValue(context.Background(), userKey{}, "john@example.com")
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithDefaultPIIValues(),
 		cloak.WithContextAttrs(mailAttrs),
 	}, ctx)
@@ -115,7 +115,7 @@ func TestContextStringIsMasked(t *testing.T) {
 // A key rule on the attribute name wins, as it would for a logged attribute.
 func TestContextKeyRuleWins(t *testing.T) {
 	ctx := withUser(context.Background(), principal{ID: 7, Email: "john@example.com"})
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithKey(cloak.Redact, "user"),
 		cloak.WithContextAttrs(userAttrs),
 	}, ctx)
@@ -130,7 +130,7 @@ func TestContextKeyRuleWins(t *testing.T) {
 
 func TestContextScalarPreserved(t *testing.T) {
 	ctx := context.WithValue(context.Background(), requestKey{}, "req-abc-123")
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithDefaultPII(),
 		cloak.WithContextAttrs(requestAttrs),
 	}, ctx)
@@ -142,7 +142,7 @@ func TestContextScalarPreserved(t *testing.T) {
 
 // A pull that returns nil must not contribute anything at all.
 func TestContextAbsentIsSkipped(t *testing.T) {
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithDefaultPII(),
 		cloak.WithContextAttrs(requestAndUserAttrs, func(context.Context) []slog.Attr { return nil }),
 	}, context.WithValue(context.Background(), absentKey{}, "x"))
@@ -156,7 +156,7 @@ func TestContextAbsentIsSkipped(t *testing.T) {
 func TestContextMultiplePulls(t *testing.T) {
 	ctx := context.WithValue(withUser(context.Background(), principal{ID: 7, Email: "john@example.com"}),
 		requestKey{}, "req-abc-123")
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithDefaultPII(),
 		cloak.WithStructScan(),
 		cloak.WithContextAttrs(requestAttrs, userAttrs),
@@ -192,7 +192,7 @@ func TestContextRunsPerRecord(t *testing.T) {
 
 // A pull may compute a value rather than read one.
 func TestContextComputedValue(t *testing.T) {
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithDefaultPII(),
 		cloak.WithContextAttrs(func(ctx context.Context) []slog.Attr {
 			if ctx.Value(requestKey{}) == nil {
@@ -210,7 +210,7 @@ func TestContextComputedValue(t *testing.T) {
 // LogValuer precedence holds for pulled values too.
 func TestContextLogValuerMasked(t *testing.T) {
 	ctx := context.WithValue(context.Background(), userKey{}, resolved{raw: "john@example.com"})
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithDefaultPIIValues(),
 		cloak.WithCompositeScan(),
 		cloak.WithContextAttrs(userAttrs),
@@ -225,7 +225,7 @@ func TestContextLogValuerMasked(t *testing.T) {
 // pulled without being rewritten.
 func TestContextSkipValueScan(t *testing.T) {
 	ctx := context.WithValue(context.Background(), requestKey{}, "john@example.com")
-	got := logCtx([]cloak.Option{
+	got := logCtx([]cloak.Options{
 		cloak.WithDefaultPIIValues(),
 		cloak.WithSkipValueScan("request_id"),
 		cloak.WithContextAttrs(requestAttrs),

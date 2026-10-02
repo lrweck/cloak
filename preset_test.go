@@ -9,7 +9,7 @@ import (
 	"github.com/lrweck/cloak"
 )
 
-func logPreset(opts []cloak.Option, args ...any) string {
+func logPreset(opts []cloak.Options, args ...any) string {
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
 	logger.Info("m", args...)
@@ -17,7 +17,7 @@ func logPreset(opts []cloak.Option, args ...any) string {
 }
 
 func TestPCIMasksCardholderData(t *testing.T) {
-	got := logPreset([]cloak.Option{cloak.WithPCI()},
+	got := logPreset([]cloak.Options{cloak.WithPCI()},
 		"pan", "4111111111111111",
 		"cvv", "123",
 		"cardholder_name", "Jane Doe",
@@ -33,7 +33,7 @@ func TestPCIMasksCardholderData(t *testing.T) {
 
 // A card number under an unexpected field name is still caught, by the detector.
 func TestPCIUsesPANDetector(t *testing.T) {
-	got := logPreset([]cloak.Option{cloak.WithPCI()},
+	got := logPreset([]cloak.Options{cloak.WithPCI()},
 		"whatever", "4111111111111111")
 	if strings.Contains(got, "4111111111111111") {
 		t.Errorf("PAN detector did not fire: %s", got)
@@ -43,7 +43,7 @@ func TestPCIUsesPANDetector(t *testing.T) {
 // Fields that describe a transaction but are not cardholder data must survive, or the
 // log stops being worth reading.
 func TestPCIKeepsNonCardholderData(t *testing.T) {
-	got := logPreset([]cloak.Option{cloak.WithPCI()},
+	got := logPreset([]cloak.Options{cloak.WithPCI()},
 		"amount", 1299, "currency", "BRL", "merchant", "ACME", "order_id", "ord_9")
 	for _, want := range []string{"1299", "BRL", "ACME", "ord_9"} {
 		if !strings.Contains(got, want) {
@@ -53,7 +53,7 @@ func TestPCIKeepsNonCardholderData(t *testing.T) {
 }
 
 func TestGDPRMasksPersonalData(t *testing.T) {
-	got := logPreset([]cloak.Option{cloak.WithGDPR()},
+	got := logPreset([]cloak.Options{cloak.WithGDPR()},
 		"email", "john@example.com",
 		"date_of_birth", "1985-04-12",
 		"passport", "X1234567",
@@ -69,7 +69,7 @@ func TestGDPRMasksPersonalData(t *testing.T) {
 
 // "name" is left out on purpose: masking every name makes logs useless.
 func TestGDPRDoesNotMaskNames(t *testing.T) {
-	got := logPreset([]cloak.Option{cloak.WithGDPR()},
+	got := logPreset([]cloak.Options{cloak.WithGDPR()},
 		"country", "Brazil", "user_id", "u-77")
 	for _, want := range []string{"Brazil", "u-77"} {
 		if !strings.Contains(got, want) {
@@ -79,7 +79,7 @@ func TestGDPRDoesNotMaskNames(t *testing.T) {
 }
 
 func TestGDPRUsesValueDetectors(t *testing.T) {
-	got := logPreset([]cloak.Option{cloak.WithGDPR()},
+	got := logPreset([]cloak.Options{cloak.WithGDPR()},
 		"note", "contact john@example.com about 192.168.1.42")
 	if strings.Contains(got, "john@example.com") || strings.Contains(got, "192.168.1.42") {
 		t.Errorf("detectors did not fire: %s", got)
@@ -89,7 +89,7 @@ func TestGDPRUsesValueDetectors(t *testing.T) {
 // The presets compose with the rest of the library rather than replacing it.
 func TestPresetComposesWithTypeRules(t *testing.T) {
 	type secret string
-	got := logPreset([]cloak.Option{
+	got := logPreset([]cloak.Options{
 		cloak.WithPCI(), cloak.WithType[secret](),
 	}, "m", "k", secret("s3cr3t"), "pan", "4111111111111111")
 
@@ -106,7 +106,7 @@ func TestLGPDMatchesGDPR(t *testing.T) {
 	if len(cloak.LGPDKeys) != len(cloak.GDPRKeys) {
 		t.Fatalf("LGPDKeys has %d entries, GDPRKeys has %d", len(cloak.LGPDKeys), len(cloak.GDPRKeys))
 	}
-	got := logPreset([]cloak.Option{cloak.WithLGPD()},
+	got := logPreset([]cloak.Options{cloak.WithLGPD()},
 		"email", "john@example.com", "cpf", "529.982.247-25", "order_id", "ord_9")
 	for _, leaked := range []string{"john@example.com", "529.982.247"} {
 		if strings.Contains(got, leaked) {
@@ -122,11 +122,11 @@ func TestLGPDMatchesGDPR(t *testing.T) {
 // IPv4 first or the IP is swallowed. Pinning it per preset, since a hand-written
 // detector order reintroduces the bug.
 func TestPresetIPv4NotSwallowedBySSN(t *testing.T) {
-	for name, opt := range map[string]cloak.Option{
+	for name, opt := range map[string]cloak.Options{
 		"PCI": cloak.WithPCI(), "GDPR": cloak.WithGDPR(), "LGPD": cloak.WithLGPD(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := logPreset([]cloak.Option{opt}, "note", "from 192.168.1.42")
+			got := logPreset([]cloak.Options{opt}, "note", "from 192.168.1.42")
 			if strings.Contains(got, "***-**-") {
 				t.Errorf("IP masked as an SSN: %s", got)
 			}

@@ -31,10 +31,10 @@ func TestPresetKeysAreDistinct(t *testing.T) {
 
 // countDetectors reports how many value rules the options install, built-ins and user
 // detectors alike.
-func countDetectors(opts ...Option) int {
+func countDetectors(opts ...Options) int {
 	c := &config{keys: make(map[string]Masker), skip: make(map[string]struct{})}
 	for _, o := range opts {
-		o(c)
+		o.apply(c)
 	}
 	return len(c.values)
 }
@@ -44,24 +44,24 @@ func countDetectors(opts ...Option) int {
 func TestComposedPresetsInstallEachDetectorOnce(t *testing.T) {
 	cases := []struct {
 		name string
-		opts []Option
+		opts []Options
 		want int // zero means the whole set
 	}{
-		{"preset twice", []Option{WithDefaultPII(), WithDefaultPII()}, 0},
-		{"preset plus values", []Option{WithDefaultPII(), WithDefaultPIIValues()}, 0},
-		{"values twice", []Option{WithDefaultPIIValues(), WithDefaultPIIValues()}, 0},
-		{"pci plus preset", []Option{WithPCI(), WithDefaultPII()}, 0},
-		{"gdpr plus preset", []Option{WithGDPR(), WithDefaultPII()}, 0},
-		{"lgpd plus gdpr", []Option{WithLGPD(), WithGDPR()}, 5},
-		{"all three presets", []Option{WithPCI(), WithGDPR(), WithDefaultPII()}, 0},
-		{"built-in offered by name first", []Option{
+		{"preset twice", []Options{WithDefaultPII(), WithDefaultPII()}, 0},
+		{"preset plus values", []Options{WithDefaultPII(), WithDefaultPIIValues()}, 0},
+		{"values twice", []Options{WithDefaultPIIValues(), WithDefaultPIIValues()}, 0},
+		{"pci plus preset", []Options{WithPCI(), WithDefaultPII()}, 0},
+		{"gdpr plus preset", []Options{WithGDPR(), WithDefaultPII()}, 0},
+		{"lgpd plus gdpr", []Options{WithLGPD(), WithGDPR()}, 5},
+		{"all three presets", []Options{WithPCI(), WithGDPR(), WithDefaultPII()}, 0},
+		{"built-in offered by name first", []Options{
 			WithValueFunc(MaskPAN), WithDefaultPIIValues(),
 		}, 0},
-		{"built-in offered by name last", []Option{
+		{"built-in offered by name last", []Options{
 			WithDefaultPIIValues(), WithValueFunc(MaskPAN),
 		}, 0},
-		{"pci alone", []Option{WithPCI()}, 1},
-		{"gdpr alone", []Option{WithGDPR()}, 5},
+		{"pci alone", []Options{WithPCI()}, 1},
+		{"gdpr alone", []Options{WithGDPR()}, 5},
 	}
 	full := len(DefaultPIIValueFuncs())
 	for _, tc := range cases {
@@ -83,12 +83,12 @@ func TestComposedPresetsInstallEachDetectorOnce(t *testing.T) {
 func TestUserDetectorsAreNeverDeduplicated(t *testing.T) {
 	cases := []struct {
 		name string
-		opts []Option
+		opts []Options
 		want int
 	}{
 		{
 			"two closures from one literal",
-			[]Option{
+			[]Options{
 				WithValueFunc(func(string) (string, bool) { return "", true }),
 				WithValueFunc(func(string) (string, bool) { return "", true }),
 			},
@@ -96,7 +96,7 @@ func TestUserDetectorsAreNeverDeduplicated(t *testing.T) {
 		},
 		{
 			"two distinct named functions",
-			[]Option{
+			[]Options{
 				WithValueFunc(MaskEmail),
 				WithValueFunc(MaskIPv4),
 			},
@@ -104,7 +104,7 @@ func TestUserDetectorsAreNeverDeduplicated(t *testing.T) {
 		},
 		{
 			"maskers keepLast with different arities",
-			[]Option{
+			[]Options{
 				WithKey(KeepLast(4), "a"),
 				WithKey(KeepLast(9), "b"),
 			},

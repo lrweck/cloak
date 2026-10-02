@@ -10,7 +10,7 @@ import (
 	"github.com/lrweck/cloak"
 )
 
-func logContain(opts []cloak.Option, msg string, args ...any) string {
+func logContain(opts []cloak.Options, msg string, args ...any) string {
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
 	logger.Info(msg, args...)
@@ -23,7 +23,7 @@ const testSecret = "sk_live_51H8xQ2"
 // value goes, not just the secret, because the rest of a URL or a message may carry
 // more of it.
 func TestContainMasksUnknownField(t *testing.T) {
-	got := logContain([]cloak.Option{cloak.WithContain(testSecret)},
+	got := logContain([]cloak.Options{cloak.WithContain(testSecret)},
 		"m", "request_url", "https://api.example.com/v1/"+testSecret+"/charge")
 
 	if strings.Contains(got, testSecret) {
@@ -38,7 +38,7 @@ func TestContainMasksUnknownField(t *testing.T) {
 }
 
 func TestContainMatchesAnySecret(t *testing.T) {
-	got := logContain([]cloak.Option{cloak.WithContain("aaa111", "bbb222")},
+	got := logContain([]cloak.Options{cloak.WithContain("aaa111", "bbb222")},
 		"m", "note", "value bbb222 here")
 
 	if strings.Contains(got, "bbb222") {
@@ -47,7 +47,7 @@ func TestContainMatchesAnySecret(t *testing.T) {
 }
 
 func TestContainLeavesOtherValuesAlone(t *testing.T) {
-	got := logContain([]cloak.Option{cloak.WithContain(testSecret)},
+	got := logContain([]cloak.Options{cloak.WithContain(testSecret)},
 		"m", "note", "nothing sensitive here")
 	if !strings.Contains(got, "nothing sensitive here") {
 		t.Errorf("unrelated value must survive: %s", got)
@@ -56,7 +56,7 @@ func TestContainLeavesOtherValuesAlone(t *testing.T) {
 
 // It is a value rule, so it also covers the message.
 func TestContainMasksMessage(t *testing.T) {
-	got := logContain([]cloak.Option{cloak.WithContain(testSecret), cloak.WithMessageScan()},
+	got := logContain([]cloak.Options{cloak.WithContain(testSecret), cloak.WithMessageScan()},
 		"failed to authenticate with "+testSecret)
 	if strings.Contains(got, testSecret) {
 		t.Errorf("secret in message leaked: %s", got)
@@ -67,7 +67,7 @@ func TestContainMasksInsideStruct(t *testing.T) {
 	type req struct {
 		URL string
 	}
-	got := logContain([]cloak.Option{
+	got := logContain([]cloak.Options{
 		cloak.WithStructScan(), cloak.WithDefaultPIIKeys(), cloak.WithContain(testSecret),
 	}, "m", "req", req{URL: "https://x/" + testSecret})
 
@@ -77,7 +77,7 @@ func TestContainMasksInsideStruct(t *testing.T) {
 }
 
 func TestContainMasksMapAndSlice(t *testing.T) {
-	got := logContain([]cloak.Option{
+	got := logContain([]cloak.Options{
 		cloak.WithCompositeScan(), cloak.WithContain(testSecret),
 	}, "m", "m", map[string]string{"k": testSecret}, "s", []string{testSecret})
 
@@ -88,7 +88,7 @@ func TestContainMasksMapAndSlice(t *testing.T) {
 
 // An empty needle matches every string, which would silence every log line.
 func TestContainIgnoresEmptySecret(t *testing.T) {
-	got := logContain([]cloak.Option{cloak.WithContain("")},
+	got := logContain([]cloak.Options{cloak.WithContain("")},
 		"m", "note", "ordinary value")
 
 	if !strings.Contains(got, "ordinary value") {
@@ -97,7 +97,7 @@ func TestContainIgnoresEmptySecret(t *testing.T) {
 }
 
 func TestContainAllEmptyIsInert(t *testing.T) {
-	got := logContain([]cloak.Option{cloak.WithContain("", "")},
+	got := logContain([]cloak.Options{cloak.WithContain("", "")},
 		"m", "note", "ordinary value")
 	if !strings.Contains(got, "ordinary value") {
 		t.Errorf("expected no rule to be installed: %s", got)
@@ -106,7 +106,7 @@ func TestContainAllEmptyIsInert(t *testing.T) {
 
 // Matching is case sensitive: a secret is a specific byte sequence.
 func TestContainIsCaseSensitive(t *testing.T) {
-	got := logContain([]cloak.Option{cloak.WithContain("Secret123")},
+	got := logContain([]cloak.Options{cloak.WithContain("Secret123")},
 		"m", "note", "secret123")
 	if !strings.Contains(got, "secret123") {
 		t.Errorf("matching must stay case sensitive: %s", got)
@@ -114,7 +114,7 @@ func TestContainIsCaseSensitive(t *testing.T) {
 }
 
 func TestContainRespectsSkipValueScan(t *testing.T) {
-	got := logContain([]cloak.Option{
+	got := logContain([]cloak.Options{
 		cloak.WithContain(testSecret), cloak.WithSkipValueScan("raw"),
 	}, "m", "raw", "body "+testSecret)
 

@@ -23,8 +23,8 @@ func stripTime(out string) string {
 func TestConstructorsMatchTheirOptions(t *testing.T) {
 	cases := []struct {
 		name string
-		new  func(slog.Handler, ...cloak.Option) slog.Handler
-		opt  cloak.Option
+		new  func(slog.Handler, ...cloak.Options) slog.Handler
+		opt  cloak.Options
 		attr slog.Attr
 	}{
 		{"PCI", cloak.NewPCI, cloak.WithPCI(), slog.Any("v", map[string]string{"cvv": "123"})},

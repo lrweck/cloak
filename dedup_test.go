@@ -15,7 +15,7 @@ import (
 // at the position it already had.
 func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
 	t.Run("substring", func(t *testing.T) {
-		got := maskWith(t, []cloak.Option{
+		got := maskWith(t, []cloak.Options{
 			cloak.WithKeyContains(cloak.Redact, "pass"),
 			cloak.WithKeyContains(cloak.Redact, "pass"),
 			cloak.WithKeyContains(cloak.Redact, "pass"),
@@ -26,7 +26,7 @@ func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
 	})
 
 	t.Run("pattern", func(t *testing.T) {
-		got := maskWith(t, []cloak.Option{
+		got := maskWith(t, []cloak.Options{
 			cloak.WithKeyRegex(`_key$`, cloak.Redact),
 			cloak.WithKeyRegex(`_key$`, cloak.Redact),
 		}, "api_key", "k1", "other", "k2")
@@ -39,7 +39,7 @@ func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
 	})
 
 	t.Run("tag", func(t *testing.T) {
-		got := maskWith(t, []cloak.Option{
+		got := maskWith(t, []cloak.Options{
 			cloak.WithStructScan(),
 			cloak.WithTag("cloak", "secret", cloak.Redact),
 			cloak.WithTag("cloak", "secret", cloak.Redact),
@@ -50,7 +50,7 @@ func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
 	})
 
 	t.Run("string and precompiled are the same rule", func(t *testing.T) {
-		got := maskWith(t, []cloak.Option{
+		got := maskWith(t, []cloak.Options{
 			cloak.WithKeyRegex(`_key$`, cloak.Redact),
 			cloak.WithKeyRegexp(regexp.MustCompile(`_key$`), cloak.Redact),
 		}, "api_key", "k1")
@@ -65,24 +65,24 @@ func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
 func TestLastMaskerWins(t *testing.T) {
 	cases := []struct {
 		name string
-		opts []cloak.Option
+		opts []cloak.Options
 		key  string
 		val  any
 		want string
 	}{
 		{
 			"substring",
-			[]cloak.Option{cloak.WithKeyContains(cloak.Redact, "pw"), cloak.WithKeyContains(cloak.KeepLast(2), "pw")},
+			[]cloak.Options{cloak.WithKeyContains(cloak.Redact, "pw"), cloak.WithKeyContains(cloak.KeepLast(2), "pw")},
 			"pw", "hunter2", "*****r2",
 		},
 		{
 			"pattern",
-			[]cloak.Option{cloak.WithKeyRegex(`^pw$`, cloak.Redact), cloak.WithKeyRegex(`^pw$`, cloak.KeepLast(2))},
+			[]cloak.Options{cloak.WithKeyRegex(`^pw$`, cloak.Redact), cloak.WithKeyRegex(`^pw$`, cloak.KeepLast(2))},
 			"pw", "hunter2", "*****r2",
 		},
 		{
 			"exact key, for comparison",
-			[]cloak.Option{cloak.WithKey(cloak.Redact, "pw"), cloak.WithKey(cloak.KeepLast(2), "pw")},
+			[]cloak.Options{cloak.WithKey(cloak.Redact, "pw"), cloak.WithKey(cloak.KeepLast(2), "pw")},
 			"pw", "hunter2", "*****r2",
 		},
 	}
@@ -99,7 +99,7 @@ func TestLastMaskerWins(t *testing.T) {
 // Two different substring rules must both stay, and their relative order decides the
 // winner — deduplication must not turn the list into a set.
 func TestDistinctRulesKeepTheirOrder(t *testing.T) {
-	got := maskWith(t, []cloak.Option{
+	got := maskWith(t, []cloak.Options{
 		cloak.WithKeyContains(cloak.KeepLast(2), "pass"),
 		cloak.WithKeyContains(cloak.Redact, "secret"),
 	}, "user_password_secret", "hunter2")
@@ -112,7 +112,7 @@ func TestDistinctRulesKeepTheirOrder(t *testing.T) {
 
 // The same holds for patterns: two distinct patterns both stay registered.
 func TestDistinctPatternsBothStay(t *testing.T) {
-	got := maskWith(t, []cloak.Option{
+	got := maskWith(t, []cloak.Options{
 		cloak.WithKeyRegex(`_key$`, cloak.Redact),
 		cloak.WithKeyRegex(`^x-`, cloak.KeepLast(2)),
 	}, "x-api_key", "abcdef", "other", "zz")
@@ -127,7 +127,7 @@ func TestDistinctPatternsBothStay(t *testing.T) {
 }
 
 // maskWith logs one record under the given options and returns the output.
-func maskWith(t *testing.T, opts []cloak.Option, args ...any) string {
+func maskWith(t *testing.T, opts []cloak.Options, args ...any) string {
 	t.Helper()
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
@@ -138,7 +138,7 @@ func maskWith(t *testing.T, opts []cloak.Option, args ...any) string {
 // KeepLast(4) and KeepLast(9) share a code pointer. The library must not treat them as
 // the same rule, or one of them would be dropped with no symptom.
 func TestClosuresSharingCodePointerAreDistinct(t *testing.T) {
-	got := maskWith(t, []cloak.Option{
+	got := maskWith(t, []cloak.Options{
 		cloak.WithKey(cloak.KeepLast(4), "a"),
 		cloak.WithKey(cloak.KeepLast(9), "b"),
 	}, "a", "abcdefghijkl", "b", "xyzabcdefghijkl")

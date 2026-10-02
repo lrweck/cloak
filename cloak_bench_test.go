@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func benchHandler(b *testing.B, opts ...Option) *slog.Logger {
+func benchHandler(b *testing.B, opts ...Options) *slog.Logger {
 	b.Helper()
 	return slog.New(New(slog.NewTextHandler(io.Discard, nil), opts...))
 }
@@ -14,11 +14,11 @@ func benchHandler(b *testing.B, opts ...Option) *slog.Logger {
 func BenchmarkLog(b *testing.B) {
 	cases := []struct {
 		name string
-		opts []Option
+		opts []Options
 	}{
 		{"passthrough", nil},
-		{"key_only", []Option{WithKey(Redact, "password", "email")}},
-		{"default_pii", []Option{WithDefaultPII()}},
+		{"key_only", []Options{WithKey(Redact, "password", "email")}},
+		{"default_pii", []Options{WithDefaultPII()}},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
@@ -33,10 +33,10 @@ func BenchmarkLog(b *testing.B) {
 func BenchmarkLogWithPII(b *testing.B) {
 	cases := []struct {
 		name string
-		opts []Option
+		opts []Options
 	}{
-		{"key_only", []Option{WithKey(Redact, "password")}},
-		{"default_pii", []Option{WithDefaultPII()}},
+		{"key_only", []Options{WithKey(Redact, "password")}},
+		{"default_pii", []Options{WithDefaultPII()}},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
@@ -60,13 +60,13 @@ func BenchmarkCompositeScan(b *testing.B) {
 	}
 	cases := []struct {
 		name string
-		opts []Option
+		opts []Options
 	}{
-		{"disabled", []Option{WithDefaultPII()}},
-		{"struct", []Option{WithDefaultPII(), WithStructScan()}},
-		{"map", []Option{WithDefaultPII(), WithMapScan()}},
-		{"slice", []Option{WithDefaultPII(), WithSliceScan()}},
-		{"composite", []Option{WithDefaultPII(), WithCompositeScan()}},
+		{"disabled", []Options{WithDefaultPII()}},
+		{"struct", []Options{WithDefaultPII(), WithStructScan()}},
+		{"map", []Options{WithDefaultPII(), WithMapScan()}},
+		{"slice", []Options{WithDefaultPII(), WithSliceScan()}},
+		{"composite", []Options{WithDefaultPII(), WithCompositeScan()}},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
@@ -80,7 +80,7 @@ func BenchmarkCompositeScan(b *testing.B) {
 
 func BenchmarkKeyLookup(b *testing.B) {
 	c := &config{keys: make(map[string]Masker), skip: make(map[string]struct{})}
-	WithDefaultPIIKeys()(c)
+	WithDefaultPIIKeys().apply(c)
 	key := normalizeKey("email")
 	for b.Loop() {
 		if _, ok := c.maskerForKey(key, key); !ok {
@@ -93,17 +93,17 @@ func BenchmarkDetectorsComposed(b *testing.B) {
 	s := "payment settled for user 42 in 120ms"
 	cases := []struct {
 		name string
-		opts []Option
+		opts []Options
 	}{
-		{"once", []Option{WithDefaultPIIValues()}},
-		{"composed", []Option{WithDefaultPII(), WithDefaultPIIValues()}},
-		{"twice", []Option{WithDefaultPII(), WithDefaultPII()}},
+		{"once", []Options{WithDefaultPIIValues()}},
+		{"composed", []Options{WithDefaultPII(), WithDefaultPIIValues()}},
+		{"twice", []Options{WithDefaultPII(), WithDefaultPII()}},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
 			c := &config{keys: make(map[string]Masker), skip: make(map[string]struct{})}
 			for _, o := range tc.opts {
-				o(c)
+				o.apply(c)
 			}
 			h := &Handler{cfg: c}
 			b.ReportAllocs()

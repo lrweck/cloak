@@ -110,8 +110,8 @@ func FuzzKeyRegexRuleNoPanic(f *testing.F) {
 		}
 		c := &config{keys: make(map[string]Masker), skip: make(map[string]struct{})}
 		c.addRegexKey(re.String(), newRegexKey(re, Redact))
-		WithKeyContains(Redact, "pass")(c)
-		WithKey(Redact, "password")(c)
+		WithKeyContains(Redact, "pass").apply(c)
+		WithKey(Redact, "password").apply(c)
 
 		m, ok := c.maskerForKey(key, normalizeKey(key))
 		if !ok {

@@ -19,15 +19,15 @@ type account struct {
 	Contact string
 }
 
-func logWith(opts []cloak.Option, fn func(*slog.Logger)) string {
+func logWith(opts []cloak.Options, fn func(*slog.Logger)) string {
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
 	fn(logger)
 	return b.String()
 }
 
-func compositeOpts(extra ...cloak.Option) []cloak.Option {
-	return append([]cloak.Option{
+func compositeOpts(extra ...cloak.Options) []cloak.Options {
+	return append([]cloak.Options{
 		cloak.WithDefaultPIIKeys(),
 		cloak.WithDefaultPIIValues(),
 	}, extra...)
@@ -210,7 +210,7 @@ func TestSlogDashTagDropped(t *testing.T) {
 func TestOptionsAreIndependent(t *testing.T) {
 	cases := []struct {
 		name   string
-		opts   []cloak.Option
+		opts   []cloak.Options
 		attr   slog.Attr
 		leaked string
 		masked string
@@ -274,7 +274,7 @@ func (r resolved) LogValue() slog.Value { return slog.StringValue(r.raw) }
 func TestLogValuerTakesPrecedenceThenMasked(t *testing.T) {
 	cases := []struct {
 		name   string
-		opts   []cloak.Option
+		opts   []cloak.Options
 		attr   slog.Attr
 		masked string
 		leaked string

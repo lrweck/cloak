@@ -16,12 +16,40 @@ import (
 	"unicode/utf8"
 )
 
-// Placeholder is the value substituted by [Redact] and by [WithContain].
+// Placeholder is the replacement a [Handler] uses for a fully redacted value unless
+// [WithRedactedValue] says otherwise.
 const Placeholder = "[REDACTED]"
 
 type Masker func(slog.Value) slog.Value
 
-func Redact(slog.Value) slog.Value { return slog.StringValue(Placeholder) }
+// Redact replaces a value entirely. It is the request for a full redaction rather than
+// a message of its own: inside a handler the replacement is that handler's redacted
+// value, which [WithRedactedValue] sets. Called outside one, it falls back to
+// [Placeholder].
+//
+// Partial maskers like [KeepLast] are unaffected, since they state their own output.
+func Redact(v slog.Value) slog.Value { return slog.StringValue(Placeholder) }
+
+// redactPtr identifies Redact so a handler can recognise the request and answer it with
+// its own message. Sound only because Redact is a package-level function with no
+// captures, so two references to it are the same function. The reasoning does not hold
+// for a masker built from a literal: two closures from one literal share a code pointer
+// while behaving differently, which is why maskers are never compared this way.
+var redactPtr = reflect.ValueOf(Redact).Pointer()
+
+func isRedact(m Masker) bool { return reflect.ValueOf(m).Pointer() == redactPtr }
+
+// WithRedactedValue sets what a fully redacted value is replaced with.
+//
+//	cloak.NewPCI(next, cloak.WithRedactedValue("***"))
+//
+// It is a property of the handler rather than of any rule: every request for a full
+// redaction answers with this string, whatever asked for it — a key rule, a tag, a
+// type, a pattern, or one of the presets. Partial maskers keep their own output, since
+// [KeepLast] and friends state exactly what they produce.
+func WithRedactedValue(msg string) Options {
+	return option(func(c *config) { c.redacted = msg })
+}
 
 func Fixed(marker string) Masker {
 	return func(slog.Value) slog.Value { return slog.StringValue(marker) }
@@ -81,6 +109,9 @@ type rule struct {
 type config struct {
 	keys map[string]Masker
 	skip map[string]struct{}
+	// redacted is the instance's replacement for a full redaction, resolved by
+	// finalize once the options have all been applied.
+	redacted string
 	// rules are value rules, which see a value of any kind.
 	rules    []ValueRule
 	values   []ValueFunc
@@ -139,18 +170,18 @@ type tagMask struct {
 //
 // Precedence: an explicit key rule wins over a type rule, and a type rule wins over
 // the value detectors.
-func WithType[T any](maskers ...Masker) Option {
+func WithType[T any](maskers ...Masker) Options {
 	m := Redact
 	if len(maskers) > 0 && maskers[0] != nil {
 		m = maskers[0]
 	}
 	t := reflect.TypeFor[T]()
-	return func(c *config) {
+	return option(func(c *config) {
 		if c.typeMasks == nil {
 			c.typeMasks = make(map[reflect.Type]Masker)
 		}
 		c.typeMasks[t] = m
-	}
+	})
 }
 
 // maskerForType returns the rule matching a value's exact Go type, if any.
@@ -186,8 +217,8 @@ func (c *config) maskerForType(v slog.Value) (Masker, bool) {
 //
 // Empty secrets are ignored: an empty needle matches everything, which would silence
 // every log line.
-func WithContain(secrets ...string) Option {
-	return func(c *config) {
+func WithContain(secrets ...string) Options {
+	return option(func(c *config) {
 		needles := make([]string, 0, len(secrets))
 		for _, s := range secrets {
 			if s != "" {
@@ -202,12 +233,12 @@ func WithContain(secrets ...string) Option {
 		c.values = slices.Insert(c.values, 0, func(s string) (string, bool) {
 			for _, needle := range needles {
 				if strings.Contains(s, needle) {
-					return Placeholder, true
+					return c.redacted, true
 				}
 			}
 			return s, false
 		})
-	}
+	})
 }
 
 // WithTag masks a struct field carrying the given struct tag.
@@ -224,8 +255,8 @@ func WithContain(secrets ...string) Option {
 //
 // Rules for different tag keys can coexist, since the key is part of each rule. A field
 // matching no rule is walked normally.
-func WithTag(key, value string, m Masker) Option {
-	return func(c *config) { c.addTag(tagID{key, value}, m) }
+func WithTag(key, value string, m Masker) Options {
+	return option(func(c *config) { c.addTag(tagID{key, value}, m) })
 }
 
 // addTag registers a tag rule, replacing one already registered for the same tag key
@@ -301,8 +332,8 @@ func (c *config) tagValue(f reflect.StructField) string {
 //
 // It also suits sources that are not context values at all, such as request-scoped
 // state kept by a web framework.
-func WithContextAttrs(pulls ...func(context.Context) []slog.Attr) Option {
-	return func(c *config) { c.ctxPulls = append(c.ctxPulls, pulls...) }
+func WithContextAttrs(pulls ...func(context.Context) []slog.Attr) Options {
+	return option(func(c *config) { c.ctxPulls = append(c.ctxPulls, pulls...) })
 }
 
 func normalizeKey(s string) string {
@@ -322,15 +353,58 @@ func normalizeKey(s string) string {
 	return b.String()
 }
 
-type Option func(*config)
+// Options configures a Handler. One Options value carries either a single option or a
+// set of them, following the shape encoding/json/v2 uses: opaque, composable, and
+// impossible to construct from outside the package.
+//
+//	opt := cloak.WithDefaultPII()                  // one option
+//	policy := cloak.JoinOptions(opt, opt2, opt3)    // a set, storable as a value
+//
+// Individual constructors return a single option; [JoinOptions] coalesces any number into
+// one value that can be named, stored and passed around, which a slice of options cannot
+// be. Properties set later override earlier ones, as everywhere else here.
+type Options interface {
+	apply(*config)
+}
+
+type option func(*config)
+
+func (f option) apply(c *config) { f(c) }
+
+// options is the combined form, so a joined value is one option rather than many.
+type options []option
+
+func (o options) apply(c *config) {
+	for _, f := range o {
+		f(c)
+	}
+}
+
+// JoinOptions coalesces options into a single [Options] value, applied in order.
+func JoinOptions(opts ...Options) Options {
+	merged := make(options, 0, len(opts))
+	for _, o := range opts {
+		switch v := o.(type) {
+		case nil:
+			continue
+		case options:
+			merged = append(merged, v...)
+		case *options:
+			merged = append(merged, *v...)
+		default:
+			merged = append(merged, option(o.apply))
+		}
+	}
+	return merged
+}
 
 // WithKey redacts attributes whose normalized key exactly matches one of keys.
-func WithKey(m Masker, keys ...string) Option {
-	return func(c *config) {
+func WithKey(m Masker, keys ...string) Options {
+	return option(func(c *config) {
 		for _, k := range keys {
 			c.keys[normalizeKey(k)] = m
 		}
-	}
+	})
 }
 
 // WithKeyContains redacts attributes whose normalized key contains one of keys as a
@@ -340,12 +414,12 @@ func WithKey(m Masker, keys ...string) Option {
 // It is looser than [WithKey]: "token" also matches "tokens_used". Keys holding
 // unrelated data ("id", "name") make it a poor choice, so prefer [WithKey] and reach
 // for this only where the prefixes are known.
-func WithKeyContains(m Masker, keys ...string) Option {
-	return func(c *config) {
+func WithKeyContains(m Masker, keys ...string) Options {
+	return option(func(c *config) {
 		for _, k := range keys {
 			c.addContains(normalizeKey(k), m)
 		}
-	}
+	})
 }
 
 // addContains registers a substring rule, replacing one already registered for the
@@ -364,8 +438,8 @@ func (c *config) addContains(part string, m Masker) {
 	c.contains = append(c.contains, rule{part: part, masker: m})
 }
 
-func WithValueFunc(f ValueFunc) Option {
-	return func(c *config) {
+func WithValueFunc(f ValueFunc) Options {
+	return option(func(c *config) {
 		// A built-in handed over by name is the same function the presets install,
 		// so mark it. Nothing else is compared, for the closure reason above.
 		if b, ok := builtinByPtr[reflect.ValueOf(f).Pointer()]; ok {
@@ -373,7 +447,7 @@ func WithValueFunc(f ValueFunc) Option {
 			return
 		}
 		c.values = append(c.values, f)
-	}
+	})
 }
 
 // ValueRule inspects a value of any kind and returns its replacement, or reports that
@@ -402,13 +476,13 @@ type ValueRule func(slog.Value) (slog.Value, bool)
 // It is not applied to a group, since replacing one would discard its structure.
 //
 // [WithSkipValueScan] governs value rules as it does the detectors.
-func WithValueRule(r ValueRule) Option {
-	return func(c *config) { c.rules = append(c.rules, r) }
+func WithValueRule(r ValueRule) Options {
+	return option(func(c *config) { c.rules = append(c.rules, r) })
 }
 
 // WithValuePredicate masks a value of any kind when pred accepts it. It is
 // [WithValueRule] for the common case where deciding and replacing are separate.
-func WithValuePredicate(pred func(slog.Value) bool, m Masker) Option {
+func WithValuePredicate(pred func(slog.Value) bool, m Masker) Options {
 	return WithValueRule(func(v slog.Value) (slog.Value, bool) {
 		if !pred(v) {
 			return v, false
@@ -492,8 +566,8 @@ func (c *config) addBuiltins(bs ...builtin) {
 	}
 }
 
-func WithDefaultPIIValues() Option {
-	return func(c *config) { c.addBuiltins(biUUID, biEmail, biIPv4, biIBAN, biCPF, biCNPJ, biSSN, biPAN, biPhone) }
+func WithDefaultPIIValues() Options {
+	return option(func(c *config) { c.addBuiltins(biUUID, biEmail, biIPv4, biIBAN, biCPF, biCNPJ, biSSN, biPAN, biPhone) })
 }
 
 var DefaultPIIKeys = []string{
@@ -515,15 +589,15 @@ var DefaultPIIKeys = []string{
 	"sortcode", "iban", "bankiban",
 }
 
-func WithDefaultPIIKeys() Option { return WithKey(Redact, DefaultPIIKeys...) }
+func WithDefaultPIIKeys() Options { return WithKey(Redact, DefaultPIIKeys...) }
 
-func WithDefaultPII() Option {
-	return func(c *config) {
+func WithDefaultPII() Options {
+	return option(func(c *config) {
 		for _, k := range DefaultPIIKeys {
 			c.keys[normalizeKey(k)] = Redact
 		}
 		c.addBuiltins(biUUID, biEmail, biIPv4, biIBAN, biCPF, biCNPJ, biSSN, biPAN, biPhone)
-	}
+	})
 }
 
 // PCIKeys are the cardholder-data fields named by PCI DSS: the data that must never
@@ -566,15 +640,15 @@ var GDPRKeys = []string{
 // It does not mask every field that mentions money — amounts, currencies and merchant
 // descriptors are not cardholder data, and masking them would cost you the transaction
 // history that makes a log useful.
-func WithPCI() Option {
-	return func(c *config) {
+func WithPCI() Options {
+	return option(func(c *config) {
 		for _, k := range PCIKeys {
 			c.keys[normalizeKey(k)] = Redact
 		}
 		// PAN only: the other format detectors are not cardholder data and their
 		// false positives would cost more than they protect here.
 		c.addBuiltins(biPAN)
-	}
+	})
 }
 
 // LGPDKeys is [GDPRKeys] under its Brazilian name. The two laws name the same
@@ -583,15 +657,15 @@ var LGPDKeys = GDPRKeys
 
 // WithLGPD is [WithGDPR] under its Brazilian name, for code that already speaks
 // LGPD.
-func WithLGPD() Option { return WithGDPR() }
+func WithLGPD() Options { return WithGDPR() }
 
 // WithGDPR enables the personal-data categories named by the GDPR.
 //
 // It is a starting point rather than a compliance claim: the regulation names
 // categories, and only your schema says which attribute holds each one. Review it, and
 // add whatever your domain calls something else.
-func WithGDPR() Option {
-	return func(c *config) {
+func WithGDPR() Options {
+	return option(func(c *config) {
 		for _, k := range GDPRKeys {
 			c.keys[normalizeKey(k)] = Redact
 		}
@@ -600,15 +674,15 @@ func WithGDPR() Option {
 		// out because the key list already covers phone fields and its heuristic
 		// would mask IDs and timestamps.
 		c.addBuiltins(biEmail, biIPv4, biCPF, biCNPJ, biSSN)
-	}
+	})
 }
 
-func WithSkipValueScan(keys ...string) Option {
-	return func(c *config) {
+func WithSkipValueScan(keys ...string) Options {
+	return option(func(c *config) {
 		for _, k := range keys {
 			c.skip[normalizeKey(k)] = struct{}{}
 		}
-	}
+	})
 }
 
 // WithMessageScan also runs the value detectors over the log message.
@@ -616,8 +690,8 @@ func WithSkipValueScan(keys ...string) Option {
 // Attributes are opt-in per key, but the message is free text nobody reviews, and
 // `slog.Info("login for "+email)` is a routine way to leak. It is off by default
 // because rewriting the message surprises readers and costs a scan per record.
-func WithMessageScan() Option {
-	return func(c *config) { c.scanMessage = true }
+func WithMessageScan() Options {
+	return option(func(c *config) { c.scanMessage = true })
 }
 
 // WithStructScan walks struct values logged through [slog.Any], masking PII in their
@@ -627,8 +701,8 @@ func WithMessageScan() Option {
 // still logs a structured object.
 //
 //	cloak.WithStructScan()   // slog.Any("user", User{Email: ...})
-func WithStructScan() Option {
-	return func(c *config) { c.scan |= compositeStruct | compositePtr }
+func WithStructScan() Options {
+	return option(func(c *config) { c.scan |= compositeStruct | compositePtr })
 }
 
 // WithMapScan walks map values logged through [slog.Any], masking both keys and values.
@@ -636,8 +710,8 @@ func WithStructScan() Option {
 // caught by name while a bare address is caught as a value.
 //
 //	cloak.WithMapScan()   // slog.Any("ctx", map[string]any{"email": ...})
-func WithMapScan() Option {
-	return func(c *config) { c.scan |= compositeMap | compositePtr }
+func WithMapScan() Options {
+	return option(func(c *config) { c.scan |= compositeMap | compositePtr })
 }
 
 // WithSliceScan walks slice values logged through [slog.Any], masking each element and
@@ -647,8 +721,8 @@ func WithMapScan() Option {
 // would rewrite a payload into decimal digits.
 //
 //	cloak.WithSliceScan()   // slog.Any("emails", []string{"a@example.com"})
-func WithSliceScan() Option {
-	return func(c *config) { c.scan |= compositeSlice | compositePtr }
+func WithSliceScan() Options {
+	return option(func(c *config) { c.scan |= compositeSlice | compositePtr })
 }
 
 // WithCompositeScan enables [WithStructScan], [WithMapScan] and [WithSliceScan] at
@@ -656,10 +730,10 @@ func WithSliceScan() Option {
 //
 // Pointers are always followed, since a pointer is just an address to the value behind
 // it.
-func WithCompositeScan() Option {
-	return func(c *config) {
+func WithCompositeScan() Options {
+	return option(func(c *config) {
 		c.scan |= compositeStruct | compositeMap | compositeSlice | compositePtr
-	}
+	})
 }
 
 type Handler struct {
@@ -667,11 +741,12 @@ type Handler struct {
 	cfg  *config
 }
 
-func New(next slog.Handler, opts ...Option) slog.Handler {
+func New(next slog.Handler, opts ...Options) slog.Handler {
 	c := &config{keys: make(map[string]Masker), skip: make(map[string]struct{})}
 	for _, opt := range opts {
-		opt(c)
+		opt.apply(c)
 	}
+	c.finalize()
 	return &Handler{next: next, cfg: c}
 }
 
@@ -684,29 +759,29 @@ func New(next slog.Handler, opts ...Option) slog.Handler {
 //	slog.SetDefault(slog.New(cloak.NewDefaultPII(os.Stdout)))
 //
 // For a named regulation prefer [NewPCI], [NewGDPR] or [NewLGPD].
-func NewDefaultPII(next slog.Handler, opts ...Option) slog.Handler {
-	return New(next, append([]Option{WithDefaultPII()}, opts...)...)
+func NewDefaultPII(next slog.Handler, opts ...Options) slog.Handler {
+	return New(next, append([]Options{WithDefaultPII()}, opts...)...)
 }
 
 // NewPCI returns a handler masking the cardholder data PCI DSS forbids in logs.
 //
 //	cloak.NewPCI(slog.NewJSONHandler(os.Stdout, nil), cloak.WithStructScan())
-func NewPCI(next slog.Handler, opts ...Option) slog.Handler {
-	return New(next, append([]Option{WithPCI()}, opts...)...)
+func NewPCI(next slog.Handler, opts ...Options) slog.Handler {
+	return New(next, append([]Options{WithPCI()}, opts...)...)
 }
 
 // NewGDPR returns a handler masking the personal-data categories GDPR names.
 //
 //	cloak.NewGDPR(slog.NewJSONHandler(os.Stdout, nil))
-func NewGDPR(next slog.Handler, opts ...Option) slog.Handler {
-	return New(next, append([]Option{WithGDPR()}, opts...)...)
+func NewGDPR(next slog.Handler, opts ...Options) slog.Handler {
+	return New(next, append([]Options{WithGDPR()}, opts...)...)
 }
 
 // NewLGPD is [NewGDPR] under its Brazilian name, for code that already speaks LGPD.
 //
 //	cloak.NewLGPD(slog.NewJSONHandler(os.Stdout, nil))
-func NewLGPD(next slog.Handler, opts ...Option) slog.Handler {
-	return New(next, append([]Option{WithLGPD()}, opts...)...)
+func NewLGPD(next slog.Handler, opts ...Options) slog.Handler {
+	return New(next, append([]Options{WithLGPD()}, opts...)...)
 }
 
 func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool {
