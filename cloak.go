@@ -79,8 +79,10 @@ type rule struct {
 }
 
 type config struct {
-	keys     map[string]Masker
-	skip     map[string]struct{}
+	keys map[string]Masker
+	skip map[string]struct{}
+	// rules are value rules, which see a value of any kind.
+	rules    []ValueRule
 	values   []ValueFunc
 	contains []rule
 	// scanMessage runs the value detectors over the log message itself, which is
@@ -372,6 +374,57 @@ func WithValueFunc(f ValueFunc) Option {
 		}
 		c.values = append(c.values, f)
 	}
+}
+
+// ValueRule inspects a value of any kind and returns its replacement, or reports that
+// it has nothing to say. It mirrors [ValueFunc] exactly — same shape, same
+// direction — so the two are one idea rather than two.
+//
+// Use it where a string detector cannot reach: an int, a duration, a time, a bool, or
+// any value at all, including a struct reached through [slog.Any].
+//
+//	cloak.WithValueRule(func(v slog.Value) (slog.Value, bool) {
+//	    if v.Kind() != slog.KindInt64 {
+//	        return v, false
+//	    }
+//	    n := v.Int64()
+//	    if n < 1_000_000_000_000 {
+//	        return v, false
+//	    }
+//	    return slog.StringValue("[large]"), true
+//	})
+type ValueRule func(slog.Value) (slog.Value, bool)
+
+// WithValueRule registers a rule over values of any kind.
+//
+// A rule runs after key, tag and type rules and before the format detectors, because
+// a rule is a deliberate statement while a detector infers from the shape of a string.
+// It is not applied to a group, since replacing one would discard its structure.
+//
+// [WithSkipValueScan] governs value rules as it does the detectors.
+func WithValueRule(r ValueRule) Option {
+	return func(c *config) { c.rules = append(c.rules, r) }
+}
+
+// WithValuePredicate masks a value of any kind when pred accepts it. It is
+// [WithValueRule] for the common case where deciding and replacing are separate.
+func WithValuePredicate(pred func(slog.Value) bool, m Masker) Option {
+	return WithValueRule(func(v slog.Value) (slog.Value, bool) {
+		if !pred(v) {
+			return v, false
+		}
+		return m(v), true
+	})
+}
+
+// valueRule runs the rules in order and returns the first replacement offered.
+func (h *Handler) valueRule(v slog.Value) (slog.Value, bool) {
+	for _, r := range h.cfg.rules {
+		if out, ok := r(v); ok {
+			return out, true
+		}
+	}
+	return v, false
 }
 
 // DefaultPIIValueFuncs returns the built-in detectors, in the order they must run.
@@ -754,6 +807,18 @@ func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 		if changed {
 			return slog.Attr{Key: a.Key, Value: slog.GroupValue(dst...)}, true
 		}
+	default:
+		// Everything that is not a group: a value rule may claim it whatever its
+		// kind, which is the point of the rule. A group is excluded because
+		// replacing one would discard the structure rather than mask it.
+		if _, skip := h.cfg.skip[key]; skip {
+			break
+		}
+		if nv, ok := h.valueRule(v); ok {
+			return slog.Attr{Key: a.Key, Value: nv}, true
+		}
+	}
+	switch v.Kind() {
 	case slog.KindString:
 		if _, ok := h.cfg.skip[key]; ok {
 			return a, false

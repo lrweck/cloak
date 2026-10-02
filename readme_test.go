@@ -387,3 +387,25 @@ func TestReadmeConstructors(t *testing.T) {
 		})
 	}
 }
+
+// The README claims a value rule reaches kinds the detectors cannot see.
+func TestReadmeValueRule(t *testing.T) {
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
+		cloak.WithValuePredicate(
+			func(v slog.Value) bool {
+				return v.Kind() == slog.KindInt64 && v.Int64() > 1_000_000_000_000
+			},
+			cloak.Redact,
+		),
+	))
+	logger.Info("m", "latency_ns", int64(5_000_000_000_000), "amount", 1299)
+
+	got := b.String()
+	if strings.Contains(got, "5000000000000") {
+		t.Fatalf("large int leaked: %s", got)
+	}
+	if !strings.Contains(got, "1299") {
+		t.Fatalf("small int must survive: %s", got)
+	}
+}

@@ -196,6 +196,39 @@ How a matched key is rewritten.
 Maskers operate on the string form of the value. They are rune-aware, so
 multibyte text is not cut mid-character.
 
+### Rules over values of any kind
+
+The detectors above only ever look at strings. `ValueRule` is the same idea one level
+up: it sees the `slog.Value` whatever its kind, so an int, a duration, a time or a bool
+is reachable too.
+
+```go
+cloak.WithValuePredicate(
+    func(v slog.Value) bool {
+        return v.Kind() == slog.KindInt64 && v.Int64() > 1_000_000_000_000
+    },
+    cloak.Redact,
+)
+```
+
+Use `WithValueRule` when deciding and replacing are separate steps, or when you want to
+rewrite rather than only mask:
+
+```go
+cloak.WithValueRule(func(v slog.Value) (slog.Value, bool) {
+    if v.Kind() != slog.KindDuration {
+        return v, false
+    }
+    return slog.StringValue("slow"), true
+})
+```
+
+A rule runs after key, tag and type rules and before the format detectors, because a
+rule is a deliberate statement while a detector infers from the shape of a string. It
+reaches struct fields, map values and slice elements like everything else, and
+`WithSkipValueScan` governs it. It is not applied to a group, since replacing one would
+discard its structure rather than mask it.
+
 ### Groups and nesting
 
 Groups are walked recursively, and every attribute is preserved — the ones that
@@ -307,6 +340,8 @@ never evaluates `LogValue()` again.
 | `WithTag(key, value, mask)` | Mask struct fields carrying a tag |
 | `WithContain(secrets...)` | Mask any value containing a known secret |
 | `WithValueFunc(fn)` | Add a value detector |
+| `WithValueRule(fn)` | Add a value rule over any kind |
+| `WithValuePredicate(pred, mask)` | Mask a value of any kind when pred accepts |
 | `WithDefaultPII()` | Preset: keys plus detectors |
 | `WithDefaultPIIKeys()` | Preset: keys only, no value scanning |
 | `WithDefaultPIIValues()` | Preset: detectors only |

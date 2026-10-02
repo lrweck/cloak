@@ -69,6 +69,14 @@ func (h *Handler) walk(x any, depth int) (any, bool) {
 	if lv, ok := x.(slog.LogValuer); ok {
 		return h.walkValue(lv.LogValue().Resolve(), depth+1)
 	}
+	// A value rule before the reflect switch, so it sees the value rather than the
+	// container around it. Skip list is not consulted here: the walk has already
+	// descended past a key the caller asked to leave alone.
+	if len(h.cfg.rules) > 0 {
+		if out, ok := h.valueRule(slog.AnyValue(x)); ok {
+			return out, true
+		}
+	}
 	// A type rule before the reflect switch, so a named type is caught wherever it
 	// sits: a slice element, a map value, anything reach() descends into.
 	if len(h.cfg.typeMasks) > 0 {
@@ -170,6 +178,15 @@ func (h *Handler) walkField(name, tag string, v slog.Value, depth int) (slog.Val
 	}
 	if _, skip := h.cfg.skip[key]; skip {
 		return v, false
+	}
+	// A value rule here as well as in walk, because a struct field reaches this path
+	// rather than the reflect switch walk uses. A rule that declines runs twice,
+	// which costs a call and changes nothing: the first to offer a replacement ends
+	// it.
+	if len(h.cfg.rules) > 0 && v.Kind() != slog.KindGroup {
+		if out, ok := h.valueRule(v); ok {
+			return out, true
+		}
 	}
 	out, changed := h.walkValue(v, depth+1)
 	if !changed {
