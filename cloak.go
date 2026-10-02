@@ -1040,8 +1040,8 @@ func isHex(b byte) bool         { return isDigit(b) || (b >= 'a' && b <= 'f') ||
 
 func luhn(d []byte) bool {
 	sum, alt := 0, false
-	for i := len(d) - 1; i >= 0; i-- {
-		n := int(d[i] - '0')
+	for _, v := range slices.Backward(d) {
+		n := int(v - '0')
 		if alt {
 			n *= 2
 			if n > 9 {
@@ -1139,7 +1139,7 @@ func validCPF(d []byte) bool {
 		return false
 	}
 	sum := 0
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		sum += int(d[i]-'0') * (10 - i)
 	}
 	check1 := (sum * 10) % 11
@@ -1150,7 +1150,7 @@ func validCPF(d []byte) bool {
 		return false
 	}
 	sum = 0
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		sum += int(d[i]-'0') * (11 - i)
 	}
 	check2 := (sum * 10) % 11
@@ -1175,7 +1175,7 @@ func validCNPJ(d []byte) bool {
 	w2 := []int{6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2}
 	check := func(n int, w []int) int {
 		sum := 0
-		for i := 0; i < n; i++ {
+		for i := range n {
 			sum += int(d[i]-'0') * w[i]
 		}
 		r := sum % 11

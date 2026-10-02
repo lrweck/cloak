@@ -192,7 +192,6 @@ var backgroundJob = []any{
 func keyRuleBuilders(keys []string) map[string]func(io.Writer) (*slog.Logger, error) {
 	out := map[string]func(io.Writer) (*slog.Logger, error){}
 	for _, l := range libraries() {
-		l := l
 		out[l.name] = func(w io.Writer) (*slog.Logger, error) { return l.buildKeys(w, keys) }
 	}
 	return out
@@ -457,7 +456,6 @@ func BenchmarkScenario(b *testing.B) {
 	for _, s := range scenarios() {
 		record, build := s.record, s.build
 		for name, mk := range build {
-			mk := mk
 			b.Run(s.name+"/"+name, func(b *testing.B) {
 				logger, err := mk(io.Discard)
 				if err != nil {
