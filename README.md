@@ -342,7 +342,10 @@ What to expect:
   walking it would rewrite a payload into decimal digits.
 
 Reflection runs only when a composite option is on. Without one, `reflect` is never called
-on the logging path.
+on the logging path. The same holds for every other optional feature: a rule that is not
+configured does not run. `TestOptionalFeaturesOnlyRunWhenEnabled` checks that both ways
+for each one, and `TestNothingIsArmedWithoutOptions` checks that nothing is armed to begin
+with.
 
 This is not a capability every masking library has. Measured in
 [bench/compare/](bench/compare/README.md), on the same record through each library:
