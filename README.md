@@ -15,6 +15,15 @@ logger := slog.New(cloak.New(
 
 Cloak wraps the handler you already use. Everything else in your code stays as-is.
 
+When the sensitivity question has a named answer, say so at the call site instead of
+burying it in an argument list:
+
+```go
+slog.SetDefault(slog.New(cloak.NewPCI(slog.NewJSONHandler(os.Stdout, nil))))
+slog.SetDefault(slog.New(cloak.NewLGPD(slog.NewJSONHandler(os.Stdout, nil))))
+slog.SetDefault(slog.New(cloak.NewDefaultPII(slog.NewJSONHandler(os.Stdout, nil))))
+```
+
 ## Why
 
 PII reaches logs by accident, not by decision:
@@ -379,6 +388,20 @@ of the same secret.
 ```go
 cloak.New(next, cloak.WithPCI())
 cloak.New(next, cloak.WithGDPR())   // or WithLGPD()
+
+// or as constructors, which put the decision at the call site
+cloak.NewPCI(next)
+cloak.NewGDPR(next)
+cloak.NewLGPD(next)
+cloak.NewDefaultPII(next)
+```
+
+Each constructor is its option and nothing else, so a caller option still wins on any
+key the preset also names:
+
+```go
+// the preset would redact card_number; this keeps the last four digits
+cloak.NewPCI(next, cloak.WithKey(cloak.KeepLast(4), "card_number"))
 ```
 
 `WithPCI` covers the cardholder data PCI DSS forbids in logs — PAN and aliases, CVV,

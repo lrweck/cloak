@@ -622,6 +622,40 @@ func New(next slog.Handler, opts ...Option) slog.Handler {
 	return &Handler{next: next, cfg: c}
 }
 
+// NewDefaultPII returns a handler masking the built-in key set and value detectors.
+//
+// It is New(next, WithDefaultPII()) with the compliance choice visible at the call
+// site, which matters more here than for the other options because "what is
+// sensitive" is a decision a reader of the code should be able to see:
+//
+//	slog.SetDefault(slog.New(cloak.NewDefaultPII(os.Stdout)))
+//
+// For a named regulation prefer [NewPCI], [NewGDPR] or [NewLGPD].
+func NewDefaultPII(next slog.Handler, opts ...Option) slog.Handler {
+	return New(next, append([]Option{WithDefaultPII()}, opts...)...)
+}
+
+// NewPCI returns a handler masking the cardholder data PCI DSS forbids in logs.
+//
+//	cloak.NewPCI(slog.NewJSONHandler(os.Stdout, nil), cloak.WithStructScan())
+func NewPCI(next slog.Handler, opts ...Option) slog.Handler {
+	return New(next, append([]Option{WithPCI()}, opts...)...)
+}
+
+// NewGDPR returns a handler masking the personal-data categories GDPR names.
+//
+//	cloak.NewGDPR(slog.NewJSONHandler(os.Stdout, nil))
+func NewGDPR(next slog.Handler, opts ...Option) slog.Handler {
+	return New(next, append([]Option{WithGDPR()}, opts...)...)
+}
+
+// NewLGPD is [NewGDPR] under its Brazilian name, for code that already speaks LGPD.
+//
+//	cloak.NewLGPD(slog.NewJSONHandler(os.Stdout, nil))
+func NewLGPD(next slog.Handler, opts ...Option) slog.Handler {
+	return New(next, append([]Option{WithLGPD()}, opts...)...)
+}
+
 func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool {
 	if h.next == nil {
 		return false

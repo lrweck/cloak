@@ -363,3 +363,27 @@ func TestReadmeKeyRegex(t *testing.T) {
 		}
 	}
 }
+
+// The README claims each constructor is usable on its own.
+func TestReadmeConstructors(t *testing.T) {
+	cases := []struct {
+		name   string
+		build  func(slog.Handler, ...cloak.Option) slog.Handler
+		attr   slog.Attr
+		leaked string
+	}{
+		{"PCI", cloak.NewPCI, slog.String("pan", "4111111111111111"), "4111111111111111"},
+		{"GDPR", cloak.NewGDPR, slog.String("email", "a@b.com"), "a@b.com"},
+		{"LGPD", cloak.NewLGPD, slog.String("email", "a@b.com"), "a@b.com"},
+		{"DefaultPII", cloak.NewDefaultPII, slog.String("email", "a@b.com"), "a@b.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var b bytes.Buffer
+			slog.New(tc.build(slog.NewTextHandler(&b, nil))).Info("m", tc.attr)
+			if strings.Contains(b.String(), tc.leaked) {
+				t.Fatalf("%s constructor leaked: %s", tc.name, b.String())
+			}
+		})
+	}
+}
