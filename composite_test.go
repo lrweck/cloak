@@ -363,3 +363,88 @@ func TestCompositeScanOffByDefault(t *testing.T) {
 		}
 	}
 }
+
+// A struct that cannot keep its shape widens to a group, and the group must carry
+// every field: one skipped after the shape broke would vanish from the record.
+// Here N is masked to a string that does not fit int64, and B follows the break.
+func TestGroupKeepsFieldsAfterShapeBreak(t *testing.T) {
+	type mixed struct {
+		A int
+		N int64
+		B int
+	}
+	got := logWith([]cloak.Options{
+		cloak.WithStructScan(),
+		cloak.WithValuePredicate(cloak.Fixed("X"), func(v slog.Value) bool {
+			return v.Kind() == slog.KindInt64 && v.Int64() == 2
+		}),
+	}, func(l *slog.Logger) {
+		l.Info("m", slog.Any("s", mixed{A: 1, N: 2, B: 3}))
+	})
+
+	for _, want := range []string{"s.A=1", "s.N=X", "s.B=3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in the widened group: %s", want, got)
+		}
+	}
+}
+
+// A changed pointer field widens to the group as well. The masking behind it is
+// correct either way, but fmt renders a nested pointer as an address, so a struct
+// keeping one reaches a TextHandler as 0x... with nothing showing a rule fired.
+func TestChangedPointerFieldIsReadableOnText(t *testing.T) {
+	type addr struct {
+		Street string
+		CEP    string
+	}
+	type user struct {
+		ID     int
+		ShipTo *addr
+		Tags   []string
+	}
+	got := logWith(compositeOpts(cloak.WithStructScan()), func(l *slog.Logger) {
+		l.Info("m", slog.Any("user", user{
+			ID:     7,
+			ShipTo: &addr{Street: "Rua X", CEP: "01310-100"},
+			Tags:   []string{"admin"},
+		}))
+	})
+
+	if strings.Contains(got, "01310-100") {
+		t.Errorf("masked value leaked: %s", got)
+	}
+	if strings.Contains(got, "0x") {
+		t.Errorf("a pointer address reached the text sink: %s", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Errorf("expected the mask to show: %s", got)
+	}
+	// The widening must not lose the siblings, in either direction.
+	for _, want := range []string{"user.ID=7", "admin"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected sibling %q to survive: %s", want, got)
+		}
+	}
+}
+
+// The widening is a text rendering concern: on JSON the value stays a nested
+// object, identical in shape to the struct.
+func TestChangedPointerFieldKeepsObjectOnJSON(t *testing.T) {
+	type addr struct {
+		Street string
+		CEP    string
+	}
+	type user struct {
+		ID     int
+		ShipTo *addr
+	}
+	var b bytes.Buffer
+	slog.New(cloak.New(slog.NewJSONHandler(&b, nil),
+		cloak.WithStructScan(), cloak.WithDefaultPII(),
+	)).Info("m", slog.Any("user", user{ID: 7, ShipTo: &addr{Street: "Rua X", CEP: "01310-100"}}))
+
+	got := b.String()
+	if !strings.Contains(got, `"ShipTo":{"Street":"Rua X","CEP":"[REDACTED]"}`) {
+		t.Errorf("expected a nested object: %s", got)
+	}
+}

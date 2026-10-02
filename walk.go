@@ -233,9 +233,11 @@ func (h *Handler) walkStruct(v reflect.Value, depth int) (any, bool) {
 		out, c := h.walkField(f.Name, h.cfg.tagValue(f), slog.AnyValue(v.Field(i).Interface()), depth+1)
 		if !c {
 			dst.Field(i).Set(v.Field(i))
-			if shaped {
-				attrs = append(attrs, slog.Any(f.Name, v.Field(i).Interface()))
-			}
+			// Unconditional: attrs is the group when the struct cannot keep its
+			// shape, and a field skipped after the shape broke would vanish from
+			// the record. The boxing costs one allocation per field on a path
+			// that already rebuilds; dropping a field costs data.
+			attrs = append(attrs, slog.Any(f.Name, v.Field(i).Interface()))
 			continue
 		}
 		dirty = true
@@ -243,6 +245,15 @@ func (h *Handler) walkStruct(v reflect.Value, depth int) (any, bool) {
 		if cv := convert(out, f.Type); cv.IsValid() {
 			dst.Field(i).Set(cv)
 		} else {
+			shaped = false
+		}
+		// A changed pointer field widens to the group too. The masking behind it
+		// is correct either way, but fmt renders a nested pointer as an address,
+		// so a struct keeping one would reach a TextHandler as 0x... with nothing
+		// showing a rule fired. A group renders the pointed-to value instead.
+		// Untouched pointers stay untouched: rebuilding for readability alone
+		// would break the passthrough the quiet path promises.
+		if f.Type.Kind() == reflect.Pointer {
 			shaped = false
 		}
 	}

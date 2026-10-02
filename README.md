@@ -510,7 +510,7 @@ not cut mid-character.
 
 Full numbers by scenario in [bench/](bench/README.md).
 
-The short version, measured against the same record logged straight to `slog`:
+The short version, each record measured against itself logged straight to `slog`:
 
 | | bare slog | with cloak | delta |
 | --- | --- | --- | --- |
@@ -554,19 +554,22 @@ A struct carrying one of these fields always rebuilds, even when no rule matched
 dropping the field is itself the change. A struct with only exported fields passes
 through untouched.
 
-**A pointer field inside a walked struct is masked, but `TextHandler` shows you an
-address.** Cloak follows the pointer and rewrites the value behind it; `%+v` then renders
-the struct field as `0xc000...`, because that is what `fmt` does with a pointer inside a
-struct. Nothing leaks — the address is not the data — but the record is unreadable and
-nothing tells you a rule fired:
+**A struct with a changed pointer field widens to a group on `TextHandler`.** Cloak
+follows the pointer and rewrites the value behind it, but `fmt` renders a nested
+pointer as an address, so keeping the struct would reach the sink as `0xc000...` with
+nothing showing a rule fired. Widening shows the pointed-to value instead:
 
 ```go
-slog.Info("m", "user", User{ShipTo: &Address{CEP: "01310-100"}})
-// TextHandler: user="{ID:7 ShipTo:0xc0000140a0}"   <- masked, but invisible
-// JSONHandler: "user":{"ID":7, "ShipTo":{"CEP":"[REDACTED]"}}
+slog.Info("m", "user", User{ID: 7, ShipTo: &Address{CEP: "01310-100"}})
+// TextHandler: user.ID=7 user.ShipTo="&{Street:Rua X CEP:[REDACTED]}"
+// JSONHandler: "user":{"ID":7,"ShipTo":{"CEP":"[REDACTED]"}}   <- unchanged
 ```
 
-Use `JSONHandler` when you walk pointers, or store the value rather than a pointer to it.
+The masking is correct either way; only the text rendering changes, and JSON is
+untouched. What still shows an address is a pointer nothing matched: rebuilding for
+readability alone would break the passthrough the quiet path promises, and `fmt`
+behaves the same with no cloak involved. Maps and slices holding pointers have the
+same residual.
 
 **Masking a map key can merge two entries.** If two distinct keys mask to the same text
 they become one entry. Nothing leaks, but an entry can be lost.
