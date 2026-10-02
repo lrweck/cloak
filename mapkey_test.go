@@ -40,7 +40,7 @@ func TestKeyRuleReachesEveryContainer(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := append([]cloak.Options{cloak.WithKey(cloak.Redact, "password")}, tc.opts...)
+			opts := append([]cloak.Options{cloak.WithKeys(cloak.Redact, "password")}, tc.opts...)
 			var b bytes.Buffer
 			logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
 			logger.Info("m", tc.attr)
@@ -55,7 +55,7 @@ func TestKeyRuleReachesEveryContainer(t *testing.T) {
 // The key itself must survive: it is the field name, not the secret, and losing it
 // makes the entry unrecognisable.
 func TestKeyRuleKeepsTheMapKey(t *testing.T) {
-	got := logWith(compositeOpts(cloak.WithMapScan(), cloak.WithKey(cloak.Redact, "password")),
+	got := logWith(compositeOpts(cloak.WithMapScan(), cloak.WithKeys(cloak.Redact, "password")),
 		func(l *slog.Logger) {
 			l.Info("m", "m", map[string]string{"password": "hunter2", "user": "jane"})
 		})
@@ -76,6 +76,7 @@ func TestDefaultPresetReachesMapKeys(t *testing.T) {
 	got := logWith(compositeOpts(cloak.WithMapScan()), func(l *slog.Logger) {
 		l.Info("m", "m", map[string]string{"password": "hunter2", "cvv": "999"})
 	})
+	got = stripTime(got)
 	if strings.Contains(got, "hunter2") || strings.Contains(got, "999") {
 		t.Errorf("default preset did not reach map keys: %s", got)
 	}
@@ -83,7 +84,7 @@ func TestDefaultPresetReachesMapKeys(t *testing.T) {
 
 // A key rule wins over the value detectors, as everywhere else.
 func TestKeyRuleBeatsDetectorOnMapValue(t *testing.T) {
-	got := logWith(compositeOpts(cloak.WithMapScan(), cloak.WithKey(cloak.KeepFirst(1), "email")),
+	got := logWith(compositeOpts(cloak.WithMapScan(), cloak.WithKeys(cloak.KeepFirst(1), "email")),
 		func(l *slog.Logger) {
 			l.Info("m", "m", map[string]string{"email": "john@example.com"})
 		})
@@ -95,7 +96,7 @@ func TestKeyRuleBeatsDetectorOnMapValue(t *testing.T) {
 // A map keyed by something other than a string has no name for a rule to match, and
 // must not panic trying.
 func TestNonStringMapKeyIsUntouched(t *testing.T) {
-	got := logWith(compositeOpts(cloak.WithMapScan(), cloak.WithKey(cloak.Redact, "password")),
+	got := logWith(compositeOpts(cloak.WithMapScan(), cloak.WithKeys(cloak.Redact, "password")),
 		func(l *slog.Logger) {
 			l.Info("m", "m", map[int]string{7: "harmless"})
 		})

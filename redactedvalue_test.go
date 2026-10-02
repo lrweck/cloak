@@ -16,10 +16,10 @@ func TestWithRedactedValueIsInstanceWide(t *testing.T) {
 		opt  cloak.Options
 		attr slog.Attr
 	}{
-		{"key rule", cloak.WithKey(cloak.Redact, "password"), slog.String("password", "x")},
+		{"key rule", cloak.WithKeys(cloak.Redact, "password"), slog.String("password", "x")},
 		{"type rule", nil, slog.Any("v", redactedType("x"))},
-		{"pattern rule", cloak.WithKeyRegex(`^pw$`, cloak.Redact), slog.String("pw", "x")},
-		{"substring rule", cloak.WithKeyContains(cloak.Redact, "pw"), slog.String("pw", "x")},
+		{"pattern rule", cloak.WithKeyRegex(cloak.Redact, `^pw$`), slog.String("pw", "x")},
+		{"substring rule", cloak.WithKeysContaining(cloak.Redact, "pw"), slog.String("pw", "x")},
 		{"tag rule", nil, slog.Any("v", tagged{Password: "x"})},
 		{"preset", nil, slog.String("cpf", "529.982.247-25")},
 	}
@@ -31,7 +31,7 @@ func TestWithRedactedValueIsInstanceWide(t *testing.T) {
 				cloak.WithDefaultPIIValues(),
 				cloak.WithStructScan(),
 				cloak.WithType[redactedType](),
-				cloak.WithTag("cloak", "secret", cloak.Redact),
+				cloak.WithTag(cloak.Redact, "cloak", "secret"),
 				cloak.WithMessageScan(),
 			}
 			if tc.opt != nil {
@@ -52,10 +52,10 @@ func TestWithRedactedValueIsInstanceWide(t *testing.T) {
 // option rather than when a rule is registered.
 func TestWithRedactedValueIsOrderIndependent(t *testing.T) {
 	before := logWithOpts([]cloak.Options{
-		cloak.WithRedactedValue("***"), cloak.WithKey(cloak.Redact, "password"),
+		cloak.WithRedactedValue("***"), cloak.WithKeys(cloak.Redact, "password"),
 	}, slog.String("password", "x"))
 	after := logWithOpts([]cloak.Options{
-		cloak.WithKey(cloak.Redact, "password"), cloak.WithRedactedValue("***"),
+		cloak.WithKeys(cloak.Redact, "password"), cloak.WithRedactedValue("***"),
 	}, slog.String("password", "x"))
 
 	if before != after {
@@ -70,7 +70,7 @@ func TestWithRedactedValueIsOrderIndependent(t *testing.T) {
 func TestRedactedValueLeavesPartialMaskersAlone(t *testing.T) {
 	got := logWithOpts([]cloak.Options{
 		cloak.WithRedactedValue("***"),
-		cloak.WithKey(cloak.KeepLast(4), "card"),
+		cloak.WithKeys(cloak.KeepLast(4), "card"),
 	}, slog.String("card", "4111111111111111"))
 
 	// The masked output is asterisks, so assert on the kept digits: a custom
@@ -150,9 +150,9 @@ func TestJoinOptionsMatchesItsParts(t *testing.T) {
 
 // Joining flattens, so a joined value nested in another join is still one option.
 func TestJoinOptionsIsAssociative(t *testing.T) {
-	a := cloak.WithKey(cloak.Redact, "password")
-	b := cloak.WithKey(cloak.KeepLast(2), "card")
-	c := cloak.WithKey(cloak.KeepFirst(1), "name")
+	a := cloak.WithKeys(cloak.Redact, "password")
+	b := cloak.WithKeys(cloak.KeepLast(2), "card")
+	c := cloak.WithKeys(cloak.KeepFirst(1), "name")
 
 	flat := logWithOpts([]cloak.Options{cloak.JoinOptions(a, b, c)},
 		slog.String("password", "hunter2"), slog.String("card", "abcdef"), slog.String("name", "abcdef"))

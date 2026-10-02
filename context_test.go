@@ -116,7 +116,7 @@ func TestContextStringIsMasked(t *testing.T) {
 func TestContextKeyRuleWins(t *testing.T) {
 	ctx := withUser(context.Background(), principal{ID: 7, Email: "john@example.com"})
 	got := logCtx([]cloak.Options{
-		cloak.WithKey(cloak.Redact, "user"),
+		cloak.WithKeys(cloak.Redact, "user"),
 		cloak.WithContextAttrs(userAttrs),
 	}, ctx)
 
@@ -202,7 +202,7 @@ func TestContextComputedValue(t *testing.T) {
 		}),
 	}, context.WithValue(context.Background(), requestKey{}, "req-1"))
 
-	if strings.Contains(got, "1234567890") {
+	if strings.Contains(stripTime(got), "1234567890") {
 		t.Fatalf("leaked: %s", got)
 	}
 }

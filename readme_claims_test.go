@@ -29,7 +29,7 @@ func TestReadmeKeyRuleBeatsDetector(t *testing.T) {
 	var out bytes.Buffer
 	slog.New(cloak.New(slog.NewJSONHandler(&out, nil),
 		cloak.WithDefaultPII(),
-		cloak.WithKey(cloak.KeepLast(4), "card_number"),
+		cloak.WithKeys(cloak.KeepLast(4), "card_number"),
 	)).Info("m", "card_number", "4111111111111111")
 
 	got := out.String()
@@ -43,7 +43,7 @@ func TestReadmeKeyRuleBeatsDetector(t *testing.T) {
 func TestReadmeRegexMatchesAsWritten(t *testing.T) {
 	var out bytes.Buffer
 	slog.New(cloak.New(slog.NewTextHandler(&out, nil),
-		cloak.WithKeyRegex(`_key$`, cloak.Redact))).Info("m", "api_key", "sk-1")
+		cloak.WithKeyRegex(cloak.Redact, `_key$`))).Info("m", "api_key", "sk-1")
 
 	if !strings.Contains(out.String(), "api_key=[REDACTED]") {
 		t.Errorf(`README says "_key$" matches api_key: %s`, out.String())

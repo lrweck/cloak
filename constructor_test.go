@@ -11,10 +11,20 @@ import (
 
 // A constructor must be exactly its option followed by nothing, so that a caller can
 // override any part of the preset.
-// stripTime drops the record timestamp, which differs between two calls and would
-// make an otherwise exact comparison flaky.
+
+// stripTime drops the record timestamp. It exists because the timestamp is the one part
+// of a log record that is different every call, so any test comparing records byte for
+// byte, or asserting that a short numeric string is absent, is at the mercy of the clock.
+// The nanoseconds a JSONHandler writes are nine digits, which is long enough to contain
+// an accidental needle; this fired about once in twenty-five runs on "cvv" being masked
+// and the timestamp happening to read .123.
+//
+// Both handler formats are handled, since a test may use either.
 func stripTime(out string) string {
 	if _, rest, ok := strings.Cut(out, "level="); ok {
+		return rest
+	}
+	if _, rest, ok := strings.Cut(out, `,"level":`); ok {
 		return rest
 	}
 	return out
@@ -70,7 +80,7 @@ func TestNewDefaultPII(t *testing.T) {
 func TestCallerOptionOverridesPreset(t *testing.T) {
 	var b bytes.Buffer
 	logger := slog.New(cloak.NewPCI(slog.NewTextHandler(&b, nil),
-		cloak.WithKey(cloak.KeepLast(4), "card_number")))
+		cloak.WithKeys(cloak.KeepLast(4), "card_number")))
 	logger.Info("m", "card_number", "4111111111111111")
 
 	got := b.String()
@@ -83,10 +93,10 @@ func TestCallerOptionOverridesPreset(t *testing.T) {
 func TestCallerOptionAddsToPreset(t *testing.T) {
 	var b bytes.Buffer
 	logger := slog.New(cloak.NewPCI(slog.NewTextHandler(&b, nil),
-		cloak.WithKey(cloak.KeepLast(4), "card_number")))
+		cloak.WithKeys(cloak.KeepLast(4), "card_number")))
 	logger.Info("m", "card_number", "4111111111111111", "cvv", "123", "amount", 1299)
 
-	got := b.String()
+	got := stripTime(b.String())
 	if !strings.Contains(got, "************1111") {
 		t.Errorf("caller rule missing: %s", got)
 	}

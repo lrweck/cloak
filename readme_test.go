@@ -30,7 +30,7 @@ func TestReadmeBasicUsage(t *testing.T) {
 func TestReadmeKeyMaskingExample(t *testing.T) {
 	var out bytes.Buffer
 	next := slog.NewTextHandler(&out, nil)
-	handler := cloak.New(next, cloak.WithKey(cloak.KeepLast(4), "card_number"))
+	handler := cloak.New(next, cloak.WithKeys(cloak.KeepLast(4), "card_number"))
 	slog.New(handler).Info("m", "card_number", "4111111111111111")
 	if !strings.Contains(out.String(), "card_number=************1111") {
 		t.Fatalf("README table wrong: %s", out.String())
@@ -60,7 +60,7 @@ func TestReadmeMaskerTable(t *testing.T) {
 func TestReadmeNormalizationClaim(t *testing.T) {
 	var out bytes.Buffer
 	next := slog.NewTextHandler(&out, nil)
-	handler := cloak.New(next, cloak.WithKey(cloak.Redact, "card_number"))
+	handler := cloak.New(next, cloak.WithKeys(cloak.Redact, "card_number"))
 	l := slog.New(handler)
 	l.Info("m", "card_number", "a")
 	l.Info("m", "cardNumber", "a")
@@ -275,7 +275,7 @@ func TestReadmeWithTag(t *testing.T) {
 	}
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
-		cloak.WithStructScan(), cloak.WithTag("cloak", "secret", cloak.Redact)))
+		cloak.WithStructScan(), cloak.WithTag(cloak.Redact, "cloak", "secret")))
 	logger.Info("m", "a", Account{ID: 7, Password: "hunter2"})
 
 	got := b.String()
@@ -344,8 +344,8 @@ func TestReadmeCompliancePresets(t *testing.T) {
 func TestReadmeKeyRegex(t *testing.T) {
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
-		cloak.WithKeyRegex(`_key$`, cloak.Redact),
-		cloak.WithKeyRegex(`^x-.*-token$`, cloak.Redact)))
+		cloak.WithKeyRegex(cloak.Redact, `_key$`),
+		cloak.WithKeyRegex(cloak.Redact, `^x-.*-token$`)))
 	logger.Info("m",
 		"api_key", "sk-123",
 		"x-auth-token", "t-1",
@@ -392,12 +392,9 @@ func TestReadmeConstructors(t *testing.T) {
 func TestReadmeValueRule(t *testing.T) {
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
-		cloak.WithValuePredicate(
-			func(v slog.Value) bool {
-				return v.Kind() == slog.KindInt64 && v.Int64() > 1_000_000_000_000
-			},
-			cloak.Redact,
-		),
+		cloak.WithValuePredicate(cloak.Redact, func(v slog.Value) bool {
+			return v.Kind() == slog.KindInt64 && v.Int64() > 1_000_000_000_000
+		}),
 	))
 	logger.Info("m", "latency_ns", int64(5_000_000_000_000), "amount", 1299)
 

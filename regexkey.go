@@ -15,7 +15,7 @@ import (
 // real structure stays a compiled regexp.
 //
 // The split matters less than it looks: a bare literal is exactly what
-// [WithKeyContains] does, so the fast path adds no new semantics. It exists to make
+// [WithKeysContaining] does, so the fast path adds no new semantics. It exists to make
 // the natural spelling of a case-insensitive alternation cheap.
 type regexKey struct {
 	// lits are the literal alternatives, already folded and normalized. A pattern
@@ -38,7 +38,7 @@ type regexKey struct {
 //
 // A folded literal can therefore match slightly more than its regexp would —
 // `(?i)api_key` matches `apiKey` — because it goes through the same normalization as
-// WithKeyContains. That direction is the safe one: cloak masks more than asked rather
+// WithKeysContaining. That direction is the safe one: cloak masks more than asked rather
 // than less, and the two never disagree about a key that needs masking.
 func (r *regexKey) matches(raw, normalized string) bool {
 	if r.re != nil {
@@ -64,7 +64,7 @@ func newRegexKey(re *regexp.Regexp, m Masker) regexKey {
 		return r
 	}
 	// An unanchored literal is a substring match; normalize it the way
-	// WithKeyContains does so both rules behave alike. Folding is already in the
+	// WithKeysContaining does so both rules behave alike. Folding is already in the
 	// runes syntax produced, and normalizeKey lowercases, so a folded literal
 	// ends up lowercase and matches the normalized key.
 	for _, w := range words {
@@ -131,13 +131,13 @@ func patternLiterals(pattern string) (words []string, fold, ok bool) {
 // `_key$` and `^x-.*-token$` mean what they look like. normalizeKey strips the
 // underscores and hyphens a pattern usually wants to anchor on.
 //
-//	cloak.WithKeyRegex(`_key$`, cloak.Redact)
-//	cloak.WithKeyRegex(`^x-.*-token$`, cloak.Redact)
+//	cloak.WithKeyRegex(cloak.Redact, `_key$`)
+//	cloak.WithKeyRegex(cloak.Redact, `^x-.*-token$`)
 //
-// Precedence is key rule, then this, then [WithKeyContains]: an exact key is the most
+// Precedence is key rule, then this, then [WithKeysContaining]: an exact key is the most
 // specific statement of intent, a pattern is deliberate, and a substring is the loosest.
-func WithKeyRegex(pattern string, m Masker) Options {
-	return WithKeyRegexp(regexp.MustCompile(pattern), m)
+func WithKeyRegex(m Masker, pattern string) Options {
+	return WithKeyRegexp(m, regexp.MustCompile(pattern))
 }
 
 // WithKeyRegexp is [WithKeyRegex] for a pattern you compiled yourself, so a bad
@@ -147,8 +147,8 @@ func WithKeyRegex(pattern string, m Masker) Options {
 //	if err != nil {
 //	    return err
 //	}
-//	cloak.WithKeyRegexp(pattern, cloak.Redact)
-func WithKeyRegexp(re *regexp.Regexp, m Masker) Options {
+//	cloak.WithKeyRegexp(cloak.Redact, pattern)
+func WithKeyRegexp(m Masker, re *regexp.Regexp) Options {
 	// A nil regexp is the shape of a discarded compile error, and it would
 	// otherwise surface as a nil dereference inside Handle — during a log call,
 	// with no stack pointing at the mistake. Fail here instead, where the message

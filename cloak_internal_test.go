@@ -105,8 +105,8 @@ func TestUserDetectorsAreNeverDeduplicated(t *testing.T) {
 		{
 			"maskers keepLast with different arities",
 			[]Options{
-				WithKey(KeepLast(4), "a"),
-				WithKey(KeepLast(9), "b"),
+				WithKeys(KeepLast(4), "a"),
+				WithKeys(KeepLast(9), "b"),
 			},
 			0, // maskers are not detectors
 		},

@@ -40,10 +40,7 @@ func TestValueRuleSeesEveryKind(t *testing.T) {
 
 func TestValueRuleCanMaskAnyKind(t *testing.T) {
 	got := logWithOpts([]cloak.Options{
-		cloak.WithValuePredicate(
-			func(v slog.Value) bool { return v.Kind() == slog.KindInt64 },
-			cloak.Redact,
-		),
+		cloak.WithValuePredicate(cloak.Redact, func(v slog.Value) bool { return v.Kind() == slog.KindInt64 }),
 	}, "int", 4242424242, "str", "keep-me", "other_int", 7)
 
 	if strings.Contains(got, "4242424242") {
@@ -81,7 +78,7 @@ func TestValueRuleRewrites(t *testing.T) {
 // than masking it.
 func TestValueRuleSkipsGroups(t *testing.T) {
 	got := logWithOpts([]cloak.Options{
-		cloak.WithValuePredicate(func(slog.Value) bool { return true }, cloak.Redact),
+		cloak.WithValuePredicate(cloak.Redact, func(slog.Value) bool { return true }),
 	}, "user", slog.GroupValue(slog.String("name", "Jane"), slog.Int("id", 7)))
 
 	// The group is not replaced wholesale, so its shape survives. Its children are
@@ -98,7 +95,7 @@ func TestValueRuleSkipsGroups(t *testing.T) {
 func TestValueRuleRespectsSkip(t *testing.T) {
 	got := logWithOpts([]cloak.Options{
 		cloak.WithSkipValueScan("raw"),
-		cloak.WithValuePredicate(func(slog.Value) bool { return true }, cloak.Redact),
+		cloak.WithValuePredicate(cloak.Redact, func(slog.Value) bool { return true }),
 	}, "raw", "verbatim", "other", "masked")
 
 	if !strings.Contains(got, "raw=verbatim") {
@@ -114,10 +111,7 @@ func TestValueRuleReachesContainers(t *testing.T) {
 	type inner struct{ Amount int }
 	opts := []cloak.Options{
 		cloak.WithStructScan(), cloak.WithMapScan(), cloak.WithSliceScan(),
-		cloak.WithValuePredicate(
-			func(v slog.Value) bool { return v.Kind() == slog.KindInt64 && v.Int64() > 1_000_000 },
-			cloak.Redact,
-		),
+		cloak.WithValuePredicate(cloak.Redact, func(v slog.Value) bool { return v.Kind() == slog.KindInt64 && v.Int64() > 1_000_000 }),
 	}
 
 	var b bytes.Buffer
@@ -160,7 +154,7 @@ func TestValueRuleBeatsDetectorButLosesToKey(t *testing.T) {
 
 	// A key rule still wins over a value rule.
 	got = logWithOpts([]cloak.Options{
-		cloak.WithKey(cloak.KeepLast(3), "email"),
+		cloak.WithKeys(cloak.KeepLast(3), "email"),
 		cloak.WithValueRule(func(v slog.Value) (slog.Value, bool) {
 			return slog.StringValue("[custom]"), true
 		}),

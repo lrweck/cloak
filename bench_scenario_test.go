@@ -66,7 +66,7 @@ func scenarioRecords() []benchRecord {
 		},
 		{
 			name: "key_rule_fires", attrs: 2,
-			opts: []cloak.Options{cloak.WithKey(cloak.Redact, "password")},
+			opts: []cloak.Options{cloak.WithKeys(cloak.Redact, "password")},
 			args: []any{"login", "password", "hunter2"},
 		},
 		{
@@ -187,7 +187,7 @@ func BenchmarkScenarioScaling(b *testing.B) {
 		})
 		b.Run("key_rules/"+itoa(n), func(b *testing.B) {
 			logger := slog.New(cloak.New(slog.NewJSONHandler(io.Discard, nil),
-				cloak.WithKey(cloak.Redact, "password"), cloak.WithDefaultPIIKeys()))
+				cloak.WithKeys(cloak.Redact, "password"), cloak.WithDefaultPIIKeys()))
 			b.ReportAllocs()
 			for b.Loop() {
 				logger.Info("event", args...)

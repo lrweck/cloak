@@ -16,9 +16,9 @@ import (
 func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
 	t.Run("substring", func(t *testing.T) {
 		got := maskWith(t, []cloak.Options{
-			cloak.WithKeyContains(cloak.Redact, "pass"),
-			cloak.WithKeyContains(cloak.Redact, "pass"),
-			cloak.WithKeyContains(cloak.Redact, "pass"),
+			cloak.WithKeysContaining(cloak.Redact, "pass"),
+			cloak.WithKeysContaining(cloak.Redact, "pass"),
+			cloak.WithKeysContaining(cloak.Redact, "pass"),
 		}, "Password", "p1")
 		if strings.Count(got, "[REDACTED]") != 1 {
 			t.Fatalf("expected one redaction: %s", got)
@@ -27,8 +27,8 @@ func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
 
 	t.Run("pattern", func(t *testing.T) {
 		got := maskWith(t, []cloak.Options{
-			cloak.WithKeyRegex(`_key$`, cloak.Redact),
-			cloak.WithKeyRegex(`_key$`, cloak.Redact),
+			cloak.WithKeyRegex(cloak.Redact, `_key$`),
+			cloak.WithKeyRegex(cloak.Redact, `_key$`),
 		}, "api_key", "k1", "other", "k2")
 		if strings.Count(got, "[REDACTED]") != 1 {
 			t.Fatalf("expected one redaction: %s", got)
@@ -41,8 +41,8 @@ func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
 	t.Run("tag", func(t *testing.T) {
 		got := maskWith(t, []cloak.Options{
 			cloak.WithStructScan(),
-			cloak.WithTag("cloak", "secret", cloak.Redact),
-			cloak.WithTag("cloak", "secret", cloak.Redact),
+			cloak.WithTag(cloak.Redact, "cloak", "secret"),
+			cloak.WithTag(cloak.Redact, "cloak", "secret"),
 		}, slog.Any("v", tagged{Password: "hunter2"}))
 		if strings.Count(got, "[REDACTED]") != 1 {
 			t.Fatalf("expected one redaction: %s", got)
@@ -51,8 +51,8 @@ func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
 
 	t.Run("string and precompiled are the same rule", func(t *testing.T) {
 		got := maskWith(t, []cloak.Options{
-			cloak.WithKeyRegex(`_key$`, cloak.Redact),
-			cloak.WithKeyRegexp(regexp.MustCompile(`_key$`), cloak.Redact),
+			cloak.WithKeyRegex(cloak.Redact, `_key$`),
+			cloak.WithKeyRegexp(cloak.Redact, regexp.MustCompile(`_key$`)),
 		}, "api_key", "k1")
 		if strings.Count(got, "[REDACTED]") != 1 {
 			t.Fatalf("expected one redaction: %s", got)
@@ -72,17 +72,17 @@ func TestLastMaskerWins(t *testing.T) {
 	}{
 		{
 			"substring",
-			[]cloak.Options{cloak.WithKeyContains(cloak.Redact, "pw"), cloak.WithKeyContains(cloak.KeepLast(2), "pw")},
+			[]cloak.Options{cloak.WithKeysContaining(cloak.Redact, "pw"), cloak.WithKeysContaining(cloak.KeepLast(2), "pw")},
 			"pw", "hunter2", "*****r2",
 		},
 		{
 			"pattern",
-			[]cloak.Options{cloak.WithKeyRegex(`^pw$`, cloak.Redact), cloak.WithKeyRegex(`^pw$`, cloak.KeepLast(2))},
+			[]cloak.Options{cloak.WithKeyRegex(cloak.Redact, `^pw$`), cloak.WithKeyRegex(cloak.KeepLast(2), `^pw$`)},
 			"pw", "hunter2", "*****r2",
 		},
 		{
 			"exact key, for comparison",
-			[]cloak.Options{cloak.WithKey(cloak.Redact, "pw"), cloak.WithKey(cloak.KeepLast(2), "pw")},
+			[]cloak.Options{cloak.WithKeys(cloak.Redact, "pw"), cloak.WithKeys(cloak.KeepLast(2), "pw")},
 			"pw", "hunter2", "*****r2",
 		},
 	}
@@ -100,8 +100,8 @@ func TestLastMaskerWins(t *testing.T) {
 // winner — deduplication must not turn the list into a set.
 func TestDistinctRulesKeepTheirOrder(t *testing.T) {
 	got := maskWith(t, []cloak.Options{
-		cloak.WithKeyContains(cloak.KeepLast(2), "pass"),
-		cloak.WithKeyContains(cloak.Redact, "secret"),
+		cloak.WithKeysContaining(cloak.KeepLast(2), "pass"),
+		cloak.WithKeysContaining(cloak.Redact, "secret"),
 	}, "user_password_secret", "hunter2")
 
 	// "pass" is registered first and both parts match, so it wins.
@@ -113,8 +113,8 @@ func TestDistinctRulesKeepTheirOrder(t *testing.T) {
 // The same holds for patterns: two distinct patterns both stay registered.
 func TestDistinctPatternsBothStay(t *testing.T) {
 	got := maskWith(t, []cloak.Options{
-		cloak.WithKeyRegex(`_key$`, cloak.Redact),
-		cloak.WithKeyRegex(`^x-`, cloak.KeepLast(2)),
+		cloak.WithKeyRegex(cloak.Redact, `_key$`),
+		cloak.WithKeyRegex(cloak.KeepLast(2), `^x-`),
 	}, "x-api_key", "abcdef", "other", "zz")
 
 	if strings.Contains(got, "abcdef") || !strings.Contains(got, "zz") {
@@ -139,8 +139,8 @@ func maskWith(t *testing.T, opts []cloak.Options, args ...any) string {
 // the same rule, or one of them would be dropped with no symptom.
 func TestClosuresSharingCodePointerAreDistinct(t *testing.T) {
 	got := maskWith(t, []cloak.Options{
-		cloak.WithKey(cloak.KeepLast(4), "a"),
-		cloak.WithKey(cloak.KeepLast(9), "b"),
+		cloak.WithKeys(cloak.KeepLast(4), "a"),
+		cloak.WithKeys(cloak.KeepLast(9), "b"),
 	}, "a", "abcdefghijkl", "b", "xyzabcdefghijkl")
 
 	// Both rules applied: KeepLast(4) keeps four characters, KeepLast(9) keeps nine.

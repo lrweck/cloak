@@ -17,7 +17,7 @@ func BenchmarkLog(b *testing.B) {
 		opts []Options
 	}{
 		{"passthrough", nil},
-		{"key_only", []Options{WithKey(Redact, "password", "email")}},
+		{"key_only", []Options{WithKeys(Redact, "password", "email")}},
 		{"default_pii", []Options{WithDefaultPII()}},
 	}
 	for _, tc := range cases {
@@ -35,7 +35,7 @@ func BenchmarkLogWithPII(b *testing.B) {
 		name string
 		opts []Options
 	}{
-		{"key_only", []Options{WithKey(Redact, "password")}},
+		{"key_only", []Options{WithKeys(Redact, "password")}},
 		{"default_pii", []Options{WithDefaultPII()}},
 	}
 	for _, tc := range cases {

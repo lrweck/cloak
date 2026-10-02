@@ -103,7 +103,7 @@ func TestTypeInsideSliceAndMap(t *testing.T) {
 func TestTypePrecedenceAgainstKeyRule(t *testing.T) {
 	got := logAny([]cloak.Options{
 		cloak.WithType[password](),
-		cloak.WithKey(cloak.KeepLast(2), "pw"),
+		cloak.WithKeys(cloak.KeepLast(2), "pw"),
 	}, slog.Any("pw", password("hunter2")))
 	if !strings.Contains(got, "***r2") {
 		t.Errorf("key rule must win over a type rule: %s", got)
@@ -126,7 +126,7 @@ type typedLogValuer struct{ v secret }
 
 func (t typedLogValuer) LogValue() slog.Value { return slog.AnyValue(t.v) }
 
-// Registering a type twice keeps the last rule, matching WithKey.
+// Registering a type twice keeps the last rule, matching WithKeys.
 func TestTypeLastRuleWins(t *testing.T) {
 	got := logAny([]cloak.Options{
 		cloak.WithType[password](),

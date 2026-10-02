@@ -78,7 +78,7 @@ func TestDefaultPII(t *testing.T) {
 
 func TestKeyNormalization(t *testing.T) {
 	var b bytes.Buffer
-	logger := slog.New(New(slog.NewTextHandler(&b, nil), WithKey(Redact, "accessToken")))
+	logger := slog.New(New(slog.NewTextHandler(&b, nil), WithKeys(Redact, "accessToken")))
 	logger.Info("test", "ACCESS_TOKEN", "one", "access-token", "two", "Access Token", "three")
 	got := b.String()
 	for _, leaked := range []string{"one", "two", "three"} {
@@ -191,9 +191,9 @@ func TestDocumentBesideOtherNumbers(t *testing.T) {
 	}
 }
 
-// WithKey matches the whole normalized key, so "db.password" and "user_password"
-// need WithKeyContains.
-func TestPrefixedKeysNotMatchedByWithKey(t *testing.T) {
+// WithKeys matches the whole normalized key, so "db.password" and "user_password"
+// need WithKeysContaining.
+func TestPrefixedKeysNotMatchedByWithKeys(t *testing.T) {
 	for _, k := range []string{"db.password", "user_password", "headers.authorization"} {
 		if normalizeKey(k) == normalizeKey("password") {
 			t.Errorf("unexpected match: %s", k)
@@ -201,11 +201,11 @@ func TestPrefixedKeysNotMatchedByWithKey(t *testing.T) {
 	}
 }
 
-func TestWithKeyContains(t *testing.T) {
+func TestWithKeysContaining(t *testing.T) {
 	var b bytes.Buffer
 	logger := slog.New(New(slog.NewTextHandler(&b, nil),
 		WithDefaultPIIValues(),
-		WithKeyContains(Redact, "password", "authorization"),
+		WithKeysContaining(Redact, "password", "authorization"),
 	))
 	logger.Info("test",
 		"db.password", "hunter2",

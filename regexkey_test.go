@@ -19,7 +19,7 @@ func logRegex(opts []cloak.Options, args ...any) string {
 
 func TestKeyRegexAnchored(t *testing.T) {
 	// The whole point: anchors only work against the name as written.
-	got := logRegex([]cloak.Options{cloak.WithKeyRegex(`_key$`, cloak.Redact)},
+	got := logRegex([]cloak.Options{cloak.WithKeyRegex(cloak.Redact, `_key$`)},
 		"api_key", "sk-123", "x_api_key", "sk-456", "key_id", "k-1")
 
 	if strings.Contains(got, "sk-123") || strings.Contains(got, "sk-456") {
@@ -31,7 +31,7 @@ func TestKeyRegexAnchored(t *testing.T) {
 }
 
 func TestKeyRegexHyphenPrefix(t *testing.T) {
-	got := logRegex([]cloak.Options{cloak.WithKeyRegex(`^x-.*-token$`, cloak.Redact)},
+	got := logRegex([]cloak.Options{cloak.WithKeyRegex(cloak.Redact, `^x-.*-token$`)},
 		"x-auth-token", "t-1", "x-api-key", "k-2")
 
 	if strings.Contains(got, "t-1") {
@@ -49,7 +49,7 @@ func TestKeyRegexPanicsOnBadPattern(t *testing.T) {
 			t.Fatal("expected a panic on an invalid pattern")
 		}
 	}()
-	cloak.WithKeyRegex("[unclosed", cloak.Redact)
+	cloak.WithKeyRegex(cloak.Redact, "[unclosed")
 }
 
 // A discarded compile error hands over a nil regexp. It must fail here, not during a
@@ -64,11 +64,11 @@ func TestKeyRegexpRejectsNil(t *testing.T) {
 			t.Fatal("expected a panic on a nil pattern")
 		}
 	}()
-	cloak.WithKeyRegexp(re, cloak.Redact)
+	cloak.WithKeyRegexp(cloak.Redact, re)
 }
 
 func TestKeyRegexCaseInsensitiveAlternation(t *testing.T) {
-	got := logRegex([]cloak.Options{cloak.WithKeyRegex(`(?i)pass|secret|token`, cloak.Redact)},
+	got := logRegex([]cloak.Options{cloak.WithKeyRegex(cloak.Redact, `(?i)pass|secret|token`)},
 		"Password", "p1", "user_secret", "s1", "ACCESS_TOKEN", "t1", "user_id", "u1")
 
 	for _, leaked := range []string{"p1", "s1", "t1"} {
@@ -82,9 +82,9 @@ func TestKeyRegexCaseInsensitiveAlternation(t *testing.T) {
 }
 
 // A case-sensitive literal must not be dragged into case-insensitivity by the
-// normalization WithKeyContains also applies.
+// normalization WithKeysContaining also applies.
 func TestKeyRegexCaseSensitiveLiteral(t *testing.T) {
-	got := logRegex([]cloak.Options{cloak.WithKeyRegex(`Secret`, cloak.Redact)},
+	got := logRegex([]cloak.Options{cloak.WithKeyRegex(cloak.Redact, `Secret`)},
 		"Secret", "s1", "secret", "s2")
 
 	if strings.Contains(got, "s1") {
@@ -98,8 +98,8 @@ func TestKeyRegexCaseSensitiveLiteral(t *testing.T) {
 // An explicit key rule is more specific than a pattern.
 func TestKeyRegexLosesToExactKey(t *testing.T) {
 	got := logRegex([]cloak.Options{
-		cloak.WithKeyRegex(`(?i)pass`, cloak.Redact),
-		cloak.WithKey(cloak.KeepLast(2), "Password"),
+		cloak.WithKeyRegex(cloak.Redact, `(?i)pass`),
+		cloak.WithKeys(cloak.KeepLast(2), "Password"),
 	}, "Password", "hunter2")
 
 	// KeepLast(2) on "hunter2" is five stars plus "r2".
@@ -109,10 +109,10 @@ func TestKeyRegexLosesToExactKey(t *testing.T) {
 }
 
 // And a pattern beats a substring rule.
-func TestKeyRegexBeatsKeyContains(t *testing.T) {
+func TestKeyRegexBeatsKeysContaining(t *testing.T) {
 	got := logRegex([]cloak.Options{
-		cloak.WithKeyContains(cloak.Redact, "pass"),
-		cloak.WithKeyRegex(`^Password$`, cloak.KeepLast(3)),
+		cloak.WithKeysContaining(cloak.Redact, "pass"),
+		cloak.WithKeyRegex(cloak.KeepLast(3), `^Password$`),
 	}, "Password", "hunter2")
 
 	if !strings.Contains(got, "****er2") {
@@ -124,7 +124,7 @@ func TestKeyRegexBeatsKeyContains(t *testing.T) {
 func TestKeyRegexReachesContainers(t *testing.T) {
 	got := logRegex([]cloak.Options{
 		cloak.WithMapScan(), cloak.WithStructScan(),
-		cloak.WithKeyRegex(`(?i)secret`, cloak.Redact),
+		cloak.WithKeyRegex(cloak.Redact, `(?i)secret`),
 	},
 		"m", map[string]string{"user_secret": "s1"},
 		"s", struct{ ClientSecret string }{ClientSecret: "s2"},
@@ -138,7 +138,7 @@ func TestKeyRegexReachesContainers(t *testing.T) {
 // A pattern naming something present in ordinary text must not fire on values, only
 // on keys.
 func TestKeyRegexDoesNotTouchValues(t *testing.T) {
-	got := logRegex([]cloak.Options{cloak.WithKeyRegex(`(?i)pass`, cloak.Redact)},
+	got := logRegex([]cloak.Options{cloak.WithKeyRegex(cloak.Redact, `(?i)pass`)},
 		"note", "password is required")
 
 	if !strings.Contains(got, "password is required") {
@@ -159,9 +159,9 @@ func TestKeyRegexUnconfiguredIsInert(t *testing.T) {
 func BenchmarkKeyRegexLiteral(b *testing.B) {
 	var buf bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&buf, nil),
-		cloak.WithKeyRegex(`(?i)pass|secret|token`, cloak.Redact),
-		cloak.WithKeyRegex(`_key$`, cloak.Redact),
-		cloak.WithKeyRegex(`^authorization$`, cloak.Redact)))
+		cloak.WithKeyRegex(cloak.Redact, `(?i)pass|secret|token`),
+		cloak.WithKeyRegex(cloak.Redact, `_key$`),
+		cloak.WithKeyRegex(cloak.Redact, `^authorization$`)))
 	b.ReportAllocs()
 	for b.Loop() {
 		logger.Info("payment settled", "id", 42, "ok", true)
@@ -169,10 +169,10 @@ func BenchmarkKeyRegexLiteral(b *testing.B) {
 }
 
 // The same rules spelled as three substring matches, for the cost comparison.
-func BenchmarkKeyContainsBaseline(b *testing.B) {
+func BenchmarkKeysContainingBaseline(b *testing.B) {
 	var buf bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewTextHandler(&buf, nil),
-		cloak.WithKeyContains(cloak.Redact, "pass", "secret", "token", "_key", "authorization")))
+		cloak.WithKeysContaining(cloak.Redact, "pass", "secret", "token", "_key", "authorization")))
 	b.ReportAllocs()
 	for b.Loop() {
 		logger.Info("payment settled", "id", 42, "ok", true)
@@ -197,7 +197,7 @@ func BenchmarkKeyRegexAOTvsSlowPath(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			var buf bytes.Buffer
 			logger := slog.New(cloak.New(slog.NewTextHandler(&buf, nil),
-				cloak.WithKeyRegex(tc.pattern, cloak.Redact)))
+				cloak.WithKeyRegex(cloak.Redact, tc.pattern)))
 			b.ReportAllocs()
 			for b.Loop() {
 				logger.Info("payment settled", "id", 42, "ok", true, "user_email", "a@b.com")
@@ -226,8 +226,8 @@ func TestKeyRegexFastPathNeverMasksLess(t *testing.T) {
 				if k == "" {
 					continue // slog drops an empty key
 				}
-				fast := logRegex([]cloak.Options{cloak.WithKeyRegex(p.fast, cloak.Redact)}, k, "v")
-				slow := logRegex([]cloak.Options{cloak.WithKeyRegex(p.slow, cloak.Redact)}, k, "v")
+				fast := logRegex([]cloak.Options{cloak.WithKeyRegex(cloak.Redact, p.fast)}, k, "v")
+				slow := logRegex([]cloak.Options{cloak.WithKeyRegex(cloak.Redact, p.slow)}, k, "v")
 				fastMasked := strings.Contains(fast, "[REDACTED]")
 				slowMasked := strings.Contains(slow, "[REDACTED]")
 				if slowMasked && !fastMasked {

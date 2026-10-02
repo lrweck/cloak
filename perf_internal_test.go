@@ -61,7 +61,7 @@ func TestHandleWideRecordKeepsEveryAttribute(t *testing.T) {
 		leakage string // value that must not appear anywhere
 	}{
 		{"no rule matched", nil, "", ""},
-		{"a rule fired", []Options{WithKey(Redact, "field_ba")}, "field_ba", ""},
+		{"a rule fired", []Options{WithKeys(Redact, "field_ba")}, "field_ba", ""},
 		{
 			"a detector fired", []Options{WithValueFunc(MaskEmail)},
 			"", "john@example.com",

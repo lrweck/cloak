@@ -7,10 +7,8 @@ A [slog.Handler](https://pkg.go.dev/log/slog#Handler) that masks personal data b
 reaches your log sink.
 
 ```go
-logger := slog.New(cloak.New(
-    slog.NewJSONHandler(os.Stdout, nil),
-    cloak.WithDefaultPII(),
-))
+logger := slog.New(cloak.New(slog.NewJSONHandler(os.Stdout, nil),
+    cloak.WithDefaultPII(),))
 ```
 
 Cloak wraps the handler you already use. Nothing else in your code changes.
@@ -46,25 +44,21 @@ Go 1.27 or newer. No dependencies.
 ```go
 package main
 
-import (
-    "log/slog"
+import ("log/slog"
     "os"
 
-    "github.com/lrweck/cloak"
-)
+    "github.com/lrweck/cloak")
 
 func main() {
-    slog.SetDefault(slog.New(cloak.New(
-        slog.NewJSONHandler(os.Stdout, nil),
-        cloak.WithDefaultPII(),
-    )))
+    slog.SetDefault(slog.New(cloak.New(slog.NewJSONHandler(os.Stdout, nil),
+        cloak.WithDefaultPII(),)))
 
     slog.Info("payment", "email", "john@example.com", "amount", 1299)
 }
 ```
 
 ```json
-{"time":"...","level":"INFO","msg":"payment","email":"[REDACTED]","amount":1299}
+{"time":"...", "level":"INFO", "msg":"payment", "email":"[REDACTED]", "amount":1299}
 ```
 
 `email` is in the preset's key list, and a key rule outranks the detector that would
@@ -76,14 +70,14 @@ Every attribute goes through the same pipeline, and the **first rule that matche
 wins**:
 
 ```
-key        WithKey            exact match on the name
-           WithKeyRegex       pattern against the name
-           WithKeyContains    substring of the name
-tag        WithTag            the field carries this struct tag
-type       WithType[T]        the value has this Go type
-value      WithValueRule      your predicate accepts it
-           WithContain        it contains a secret you know
-           detectors          it looks like PAN, CPF, email, IP, UUID...
+key        WithKeys             exact match on the name
+           WithKeyRegex        pattern against the name
+           WithKeysContaining  substring of the name
+tag        WithTag              the field carries this struct tag
+type       WithType[T]          the value has this Go type
+value      WithValueRule        your predicate accepts it
+           WithContain          it contains a secret you know
+           detectors            it looks like PAN, CPF, email, IP, UUID...
 ```
 
 That order is fixed and does not depend on the order you pass options. It runs from most
@@ -92,20 +86,40 @@ shape of a string.
 
 Three consequences fall out of it:
 
-- **A key rule beats a detector.** `WithKey(KeepLast(4), "card_number")` keeps the last
+- **A key rule beats a detector.** `WithKeys(KeepLast(4), "card_number")` keeps the last
   four digits instead of the full redaction the preset would apply.
 - **Rules reach inside data.** Once a composite option is on, struct fields, map values
   and slice elements each go through the whole pipeline.
 - **`slog.LogValuer` is resolved first.** A value that knows how to log itself has
   already decided what it exposes, so that is what gets masked.
 
+## How the options are shaped
+
+Every option that takes a masker takes it **first**:
+
+```go
+cloak.WithKeys(cloak.KeepLast(4), "card_number")
+cloak.WithKeysContaining(cloak.Redact, "password")
+cloak.WithKeyRegex(cloak.Redact, `^x-.*-token$`)
+cloak.WithTag(cloak.Redact, "cloak", "secret")
+cloak.WithValuePredicate(cloak.Redact, pred)
+```
+
+That is not taste, it is Go. The subject of a key rule is a variadic list, and a variadic
+parameter has to come last — so a masker in the final position is impossible for exactly
+the options people reach for most. First position gives one rule with nothing to
+remember.
+
+An option that takes several subjects says so in its name: `WithKeys`,
+`WithKeysContaining`. One that takes a single pattern or a single tag does not.
+
 ## Matching a key
 
 The most direct rule, and the one to reach for when you know the field.
 
 ```go
-cloak.WithKey(cloak.Redact, "password", "card_number")
-cloak.WithKey(cloak.KeepLast(4), "card_number")   // keep the last 4 characters
+cloak.WithKeys(cloak.Redact, "password", "card_number")
+cloak.WithKeys(cloak.KeepLast(4), "card_number")   // keep the last 4 characters
 ```
 
 Names are normalized before lookup: case is folded, and `_`, `-`, spaces and tabs are
@@ -115,17 +129,17 @@ from one entry.
 For qualified names a whole-key match cannot see:
 
 ```go
-cloak.WithKeyContains(cloak.Redact, "password")   // db.password, user_password
+cloak.WithKeysContaining(cloak.Redact, "password")   // db.password, user_password
 ```
 
-It is looser — `token` also matches `tokens_used` — so prefer `WithKey` unless you know
+It is looser — `token` also matches `tokens_used` — so prefer `WithKeys` unless you know
 the prefixes.
 
 For an anchor, which a substring cannot express:
 
 ```go
-cloak.WithKeyRegex(`_key$`, cloak.Redact)          // api_key, x_api_key
-cloak.WithKeyRegex(`^x-.*-token$`, cloak.Redact)   // x-auth-token
+cloak.WithKeyRegex(cloak.Redact, `_key$`)          // api_key, x_api_key
+cloak.WithKeyRegex(cloak.Redact, `^x-.*-token$`)   // x-auth-token
 ```
 
 Patterns match the name **as written**. `normalizeKey` strips the underscores and hyphens
@@ -195,12 +209,9 @@ Detectors only ever see strings. To reach an int, a duration, a time or a bool, 
 value rule:
 
 ```go
-cloak.WithValuePredicate(
-    func(v slog.Value) bool {
+cloak.WithValuePredicate(cloak.Redact, func(v slog.Value) bool {
         return v.Kind() == slog.KindInt64 && v.Int64() > 1_000_000_000_000
-    },
-    cloak.Redact,
-)
+    })
 ```
 
 Use `WithValueRule` when deciding and replacing are separate, or when you want to
@@ -256,7 +267,7 @@ type Account struct {
     Password string `cloak:"secret"`
 }
 
-cloak.WithTag("cloak", "secret", cloak.Redact)
+cloak.WithTag(cloak.Redact, "cloak", "secret")
 ```
 
 The tag key is part of the rule, so rules for different namespaces coexist.
@@ -285,8 +296,7 @@ Groups are walked recursively, and every attribute is preserved, matched or not:
 slog.Group("user",
     slog.Int("id", 7),                        // kept
     slog.String("email", "john@example.com"), // masked
-    slog.String("name", "Jane"),              // kept
-)
+    slog.String("name", "Jane"),              // kept)
 // user.id=7 user.email=[REDACTED] user.name=Jane
 ```
 
@@ -401,7 +411,7 @@ the preset also names:
 
 ```go
 // the preset would redact card_number; this keeps the last four digits
-cloak.NewPCI(next, cloak.WithKey(cloak.KeepLast(4), "card_number"))
+cloak.NewPCI(next, cloak.WithKeys(cloak.KeepLast(4), "card_number"))
 ```
 
 `WithDefaultPII` turns on 102 keys and 9 detectors, covering credentials, identity
@@ -457,16 +467,16 @@ function that returns one. Later options override earlier ones, as everywhere el
 | Option | Effect |
 | --- | --- |
 | `WithRedactedValue(msg)` | What a full redaction is replaced with |
-| `WithKey(mask, keys...)` | Mask whole-key matches |
-| `WithKeyContains(mask, keys...)` | Mask substring matches |
-| `WithKeyRegex(pattern, mask)` | Mask keys matching a pattern |
-| `WithKeyRegexp(re, mask)` | Same, for a pattern you compiled |
+| `WithKeys(mask, keys...)` | Mask whole-key matches |
+| `WithKeysContaining(mask, keys...)` | Mask substring matches |
+| `WithKeyRegex(mask, pattern)` | Mask keys matching a pattern |
+| `WithKeyRegexp(mask, re)` | Same, for a pattern you compiled |
 | `WithType[T](maskers...)` | Mask values of Go type `T` |
-| `WithTag(key, value, mask)` | Mask struct fields carrying a tag |
+| `WithTag(mask, key, value)` | Mask struct fields carrying a tag |
 | `WithContain(secrets...)` | Mask any value containing a known secret |
 | `WithValueFunc(fn)` | Add a value detector |
 | `WithValueRule(fn)` | Add a value rule over any kind |
-| `WithValuePredicate(pred, mask)` | Mask a value of any kind when pred accepts |
+| `WithValuePredicate(mask, pred)` | Mask a value of any kind when pred accepts |
 | `WithDefaultPII()` | Preset: keys plus detectors |
 | `WithDefaultPIIKeys()` | Preset: keys only |
 | `WithDefaultPIIValues()` | Preset: detectors only |
@@ -553,7 +563,7 @@ nothing tells you a rule fired:
 ```go
 slog.Info("m", "user", User{ShipTo: &Address{CEP: "01310-100"}})
 // TextHandler: user="{ID:7 ShipTo:0xc0000140a0}"   <- masked, but invisible
-// JSONHandler: "user":{"ID":7,"ShipTo":{"CEP":"[REDACTED]"}}
+// JSONHandler: "user":{"ID":7, "ShipTo":{"CEP":"[REDACTED]"}}
 ```
 
 Use `JSONHandler` when you walk pointers, or store the value rather than a pointer to it.

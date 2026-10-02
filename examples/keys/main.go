@@ -28,13 +28,13 @@ func main() {
 		cloak.WithType[Password](),
 		// Then a struct tag, which survives renaming the field.
 		cloak.WithStructScan(),
-		cloak.WithTag("cloak", "secret", cloak.KeepFirst(4)),
+		cloak.WithTag(cloak.KeepFirst(4), "cloak", "secret"),
 		// Then exact names, with case and separators folded.
-		cloak.WithKey(cloak.Redact, "card_number"),
+		cloak.WithKeys(cloak.Redact, "card_number"),
 		// Then a pattern, for names you cannot enumerate.
-		cloak.WithKeyRegex(`_token$`, cloak.KeepLast(6)),
+		cloak.WithKeyRegex(cloak.KeepLast(6), `_token$`),
 		// Then a substring, which sees the qualified names exact matching cannot.
-		cloak.WithKeyContains(cloak.Redact, "ssn"),
+		cloak.WithKeysContaining(cloak.Redact, "ssn"),
 	))
 
 	logger.Info("login",
@@ -50,7 +50,7 @@ func main() {
 	redacted := slog.New(cloak.New(
 		slog.NewTextHandler(os.Stdout, nil),
 		cloak.WithDefaultPII(),
-		cloak.WithKey(cloak.KeepLast(4), "card_number"),
+		cloak.WithKeys(cloak.KeepLast(4), "card_number"),
 	))
 	redacted.Info("override", "card_number", "4111111111111111")
 }

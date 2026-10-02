@@ -5,6 +5,24 @@
 // validation required by the detector (for example, Luhn for PAN or check
 // digits for CPF/CNPJ/SSN). This keeps the common logging path inexpensive and
 // reduces false positives from arbitrary strings.
+//
+// # Naming
+//
+// Every option that takes a [Masker] takes it first:
+//
+//	cloak.WithKeys(cloak.KeepLast(4), "card_number")
+//	cloak.WithKeysContaining(cloak.Redact, "password")
+//	cloak.WithKeyRegex(cloak.Redact, `^x-.*-token$`)
+//	cloak.WithTag(cloak.Redact, "cloak", "secret")
+//	cloak.WithValuePredicate(cloak.Redact, pred)
+//
+// The reason is Go, not taste: the subject of a key rule is a variadic list, and a
+// variadic parameter has to come last. A Masker in the last position is therefore
+// impossible for exactly the options people reach for most. Putting it first gives
+// one rule with no exceptions to remember.
+//
+// An option that takes several subjects says so in its name — [WithKeys],
+// [WithKeysContaining]. One that takes a single pattern or a single tag does not.
 package cloak
 
 import (
@@ -248,14 +266,14 @@ func WithContain(secrets ...string) Options {
 //	    Password string `cloak:"secret"`
 //	}
 //
-//	cloak.WithTag("cloak", "secret", cloak.Redact)
+//	cloak.WithTag(cloak.Redact, "cloak", "secret")
 //
 // A tag is the most durable way to mark a field: renaming the field does not lose the
 // rule, and the intent sits on the field rather than in the logger's configuration.
 //
 // Rules for different tag keys can coexist, since the key is part of each rule. A field
 // matching no rule is walked normally.
-func WithTag(key, value string, m Masker) Options {
+func WithTag(m Masker, key, value string) Options {
 	return option(func(c *config) { c.addTag(tagID{key, value}, m) })
 }
 
@@ -417,8 +435,14 @@ func JoinOptions(opts ...Options) Options {
 	return merged
 }
 
-// WithKey redacts attributes whose normalized key exactly matches one of keys.
-func WithKey(m Masker, keys ...string) Options {
+// WithKeys masks attributes whose normalized key exactly matches one of keys.
+//
+//	cloak.WithKeys(cloak.Redact, "password", "cpf")
+//	cloak.WithKeys(cloak.KeepLast(4), "card_number")
+//
+// Matching is on the normalized key, so card_number, cardNumber, CARD-NUMBER and
+// "Card Number" are all the same rule from one entry.
+func WithKeys(m Masker, keys ...string) Options {
 	return option(func(c *config) {
 		for _, k := range keys {
 			c.keys[normalizeKey(k)] = m
@@ -426,14 +450,16 @@ func WithKey(m Masker, keys ...string) Options {
 	})
 }
 
-// WithKeyContains redacts attributes whose normalized key contains one of keys as a
+// WithKeysContaining masks attributes whose normalized key contains one of keys as a
 // substring. It catches the qualified names that exact matching misses, such as
 // "db.password" or "headers.Authorization".
 //
-// It is looser than [WithKey]: "token" also matches "tokens_used". Keys holding
-// unrelated data ("id", "name") make it a poor choice, so prefer [WithKey] and reach
+//	cloak.WithKeysContaining(cloak.Redact, "password")
+//
+// It is looser than [WithKeys]: "token" also matches "tokens_used". Keys holding
+// unrelated data ("id", "name") make it a poor choice, so prefer [WithKeys] and reach
 // for this only where the prefixes are known.
-func WithKeyContains(m Masker, keys ...string) Options {
+func WithKeysContaining(m Masker, keys ...string) Options {
 	return option(func(c *config) {
 		for _, k := range keys {
 			c.addContains(normalizeKey(k), m)
@@ -444,7 +470,7 @@ func WithKeyContains(m Masker, keys ...string) Options {
 // addContains registers a substring rule, replacing one already registered for the
 // same part. Replacing rather than appending means the rule cannot be scanned twice,
 // and the newest masker is the one that applies — the same last-wins behaviour
-// WithKey already has, since it is a map.
+// WithKeys already has, since it is a map.
 func (c *config) addContains(part string, m Masker) {
 	if i, ok := c.containsIdx[part]; ok {
 		c.contains[i].masker = m
@@ -501,7 +527,11 @@ func WithValueRule(r ValueRule) Options {
 
 // WithValuePredicate masks a value of any kind when pred accepts it. It is
 // [WithValueRule] for the common case where deciding and replacing are separate.
-func WithValuePredicate(pred func(slog.Value) bool, m Masker) Options {
+//
+//	cloak.WithValuePredicate(cloak.Redact, func(v slog.Value) bool {
+//	    return v.Kind() == slog.KindInt64 && v.Int64() > 1_000_000_000_000
+//	})
+func WithValuePredicate(m Masker, pred func(slog.Value) bool) Options {
 	return WithValueRule(func(v slog.Value) (slog.Value, bool) {
 		if !pred(v) {
 			return v, false
@@ -608,7 +638,7 @@ var DefaultPIIKeys = []string{
 	"sortcode", "iban", "bankiban",
 }
 
-func WithDefaultPIIKeys() Options { return WithKey(Redact, DefaultPIIKeys...) }
+func WithDefaultPIIKeys() Options { return WithKeys(Redact, DefaultPIIKeys...) }
 
 func WithDefaultPII() Options {
 	return option(func(c *config) {

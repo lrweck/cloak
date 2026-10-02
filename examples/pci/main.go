@@ -21,7 +21,7 @@ func main() {
 		// A caller option still wins on any key the preset also names. Keeping the
 		// last four digits is usually what you want for a PAN: enough to correlate,
 		// not enough to charge with.
-		cloak.WithKey(cloak.KeepLast(4), "card_number"),
+		cloak.WithKeys(cloak.KeepLast(4), "card_number"),
 		// One preset per handler, so the rules do not accumulate across loggers.
 		cloak.WithMessageScan(),
 	))

@@ -27,8 +27,8 @@ func logTagged(opts []cloak.Options, v any) string {
 func withTags(extra ...cloak.Options) []cloak.Options {
 	return append([]cloak.Options{
 		cloak.WithStructScan(),
-		cloak.WithTag("cloak", "secret", cloak.Redact),
-		cloak.WithTag("cloak", "pii", cloak.KeepFirst(1)),
+		cloak.WithTag(cloak.Redact, "cloak", "secret"),
+		cloak.WithTag(cloak.KeepFirst(1), "cloak", "pii"),
 	}, extra...)
 }
 
@@ -71,7 +71,7 @@ func TestTagKeyIsHonoured(t *testing.T) {
 	}
 	got := logTagged([]cloak.Options{
 		cloak.WithStructScan(),
-		cloak.WithTag("json", "secret", cloak.Redact),
+		cloak.WithTag(cloak.Redact, "json", "secret"),
 	}, doc{Secret: "hunter2"})
 	if strings.Contains(got, "hunter2") {
 		t.Errorf("json tag key should have matched: %s", got)
@@ -88,7 +88,7 @@ func TestTagKeyIsHonoured(t *testing.T) {
 func TestTagUnrelatedKeyIgnored(t *testing.T) {
 	got := logTagged([]cloak.Options{
 		cloak.WithStructScan(),
-		cloak.WithTag("cloak", "secret", cloak.Redact),
+		cloak.WithTag(cloak.Redact, "cloak", "secret"),
 	}, tagged{Other: "visible"})
 	if !strings.Contains(got, "visible") {
 		t.Errorf("json:\"other\" is not cloak:\"secret\": %s", got)
@@ -102,8 +102,8 @@ func TestTagPrecedenceAgainstKeyRule(t *testing.T) {
 	}
 	got := logTagged([]cloak.Options{
 		cloak.WithStructScan(),
-		cloak.WithTag("cloak", "secret", cloak.Redact),
-		cloak.WithKey(cloak.KeepLast(3), "Password"),
+		cloak.WithTag(cloak.Redact, "cloak", "secret"),
+		cloak.WithKeys(cloak.KeepLast(3), "Password"),
 	}, both{Password: "hunter2"})
 
 	if !strings.Contains(got, "****er2") {
