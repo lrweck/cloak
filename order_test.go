@@ -2,12 +2,6 @@ package cloak
 
 import "testing"
 
-var detectors = map[string]ValueFunc{
-	"PAN": MaskPAN, "CPF": MaskCPF, "CNPJ": MaskCNPJ, "SSN": MaskSSN,
-	"IBAN": MaskIBAN, "Email": MaskEmail, "IPv4": MaskIPv4,
-	"UUID": MaskUUID, "Phone": MaskPhone,
-}
-
 var samples = map[string]string{
 	"PAN":   "4111111111111111",
 	"CPF":   "529.982.247-25",

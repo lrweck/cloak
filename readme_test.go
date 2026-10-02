@@ -249,10 +249,6 @@ func TestReadmeMainExampleCompiles(t *testing.T) {
 // The README claims a type rule masks a value wherever it appears.
 func TestReadmeWithType(t *testing.T) {
 	type Password string
-	type Login struct {
-		User     string
-		Password Password
-	}
 	var b bytes.Buffer
 	logger := slog.New(cloak.New(slog.NewJSONHandler(&b, nil),
 		cloak.WithType[Password]()))

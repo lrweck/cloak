@@ -55,6 +55,9 @@ func TestKeyRegexPanicsOnBadPattern(t *testing.T) {
 // A discarded compile error hands over a nil regexp. It must fail here, not during a
 // log call with no stack pointing at the mistake.
 func TestKeyRegexpRejectsNil(t *testing.T) {
+	// Invalid on purpose: the next assertion is that the nil pattern is rejected
+	// rather than handed to a log call. golangci-lint cannot see that.
+	//nolint:staticcheck // SA1000: the malformed pattern is the subject under test
 	re, err := regexp.Compile("[unclosed")
 	if err == nil || re != nil {
 		t.Fatalf("expected a nil regexp and an error, got %v %v", re, err)

@@ -1,0 +1,85 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Must match go.mod, for the reason spelled out in test.yml: GOTOOLCHAIN=auto
+          # fetching a newer toolchain than the module declares means CI never tested
+          # what it claimed to.
+          go-version: '1.27'
+
+      # Pinned to a minor version on purpose. @latest silently changes what runs, and a
+      # lint upgrade should be a reviewed change rather than a surprise on a PR. Bump it
+      # deliberately.
+      - name: install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+
+      - name: lint
+        run: golangci-lint run --timeout 5m
+
+      # Report, do not gate. Coverage moving is expected; coverage *falling* is the
+      # signal, and the floor below is what fails the build. The upload is here so the
+      # number is visible on the run page without a third-party service.
+      #
+      # Measured on the library alone. `./...` pulls in examples/, which are runnable
+      # demos with nothing to cover, and they drag the total from 93.4% to 85.9%.
+      - name: coverage
+        run: go test -coverprofile=cover.out -covermode=atomic .
+
+      - name: enforce the coverage floor
+        run: |
+          total=$(go tool cover -func=cover.out | awk '/^total:/ {print $NF}' | tr -d '%')
+          echo "cobertura: ${total}%"
+          floor=90
+          awk -v t="$total" -v f="$floor" 'BEGIN { exit (t+0 >= f+0) ? 0 : 1 }' || {
+            echo "cobertura ${total}% abaixo do piso de ${floor}%"
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cover.out
+          path: cover.out
+          if-no-files-found: error
+
+  # The coverage badge has no third-party service behind it, so nothing would ever
+  # correct it: a shields.io URL with the number written into it is a claim, not a
+  # measurement, and it would keep claiming 93.4% after the coverage fell. This job
+  # rewrites the number in the README, and only when it actually changed.
+  #
+  # `[skip ci]` on the commit is what stops the loop — otherwise this job's own push
+  # would re-trigger it and commit the same number forever.
+  badge:
+    needs: lint
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - run: go test -coverprofile=cover.out -covermode=atomic .
+      - name: rewrite the badge only when the number moved
+        run: |
+          pct=$(go tool cover -func=cover.out | awk '/^total:/ {print $NF}' | tr -d '%')
+          echo "cobertura: ${pct}%"
+          sed -i -E "s|badge/coverage-[0-9.]+%25-|badge/coverage-${pct}%25-|" README.md
+          if git diff --quiet -- README.md; then
+            echo "badge ja estava em ${pct}%"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "chore: cobertura em ${pct}% [skip ci]"
+          git push

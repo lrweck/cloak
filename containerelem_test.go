@@ -146,10 +146,6 @@ func TestPassthroughSliceCostDoesNotGrowWithWidth(t *testing.T) {
 // The widened slice has to carry every element, including the ones after the element
 // that broke the shape.
 func TestWidenedSliceKeepsEveryElement(t *testing.T) {
-	type mixed struct {
-		N int
-		S string
-	}
 	// A value rule that turns an int into a string breaks the element type, so the
 	// slice widens; the elements around it still have to survive.
 	got := logWith([]cloak.Options{

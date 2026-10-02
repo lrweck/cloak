@@ -76,19 +76,24 @@ type signature struct {
 func optionSignatures(t *testing.T) []signature {
 	t.Helper()
 
-	pkgs, err := parser.ParseDir(token.NewFileSet(), ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	// parser.ParseDir was deprecated in Go 1.25 and the suggested replacement,
+	// golang.org/x/tools/go/packages, is a dependency this library does not have. Reading
+	// the directory and parsing each file is the same walk without either.
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parsing the package: %v", err)
-	}
-	pkg, ok := pkgs["cloak"]
-	if !ok {
-		t.Fatal("package cloak not found in its own directory")
+		t.Fatalf("reading the package directory: %v", err)
 	}
 
 	var out []signature
-	for _, f := range pkg.Files {
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
 		for _, decl := range f.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || !strings.HasPrefix(fn.Name.Name, "With") || fn.Recv != nil {

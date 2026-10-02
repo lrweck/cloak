@@ -7,9 +7,6 @@ func newConfigForBench() *config {
 	return &config{keys: make(map[string]Masker), skip: make(map[string]struct{})}
 }
 
-// normalizeForTest mirrors normalizeKey for the exported preset lists.
-func normalizeForTest(s string) string { return normalizeKey(s) }
-
 // Every key must survive normalization uniquely, or a list is hiding a typo.
 func TestPresetKeysAreDistinct(t *testing.T) {
 	for name, keys := range map[string][]string{

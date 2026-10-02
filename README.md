@@ -1,7 +1,11 @@
 # cloak
 
+[![lint](https://github.com/lrweck/cloak/actions/workflows/lint.yml/badge.svg)](https://github.com/lrweck/cloak/actions/workflows/lint.yml)
+[![test](https://github.com/lrweck/cloak/actions/workflows/test.yml/badge.svg)](https://github.com/lrweck/cloak/actions/workflows/test.yml)
+[![coverage](https://img.shields.io/badge/coverage-93.4%25-c7f9a2)](#testing)
 [![Go Reference](https://pkg.go.dev/badge/github.com/lrweck/cloak.svg)](https://pkg.go.dev/github.com/lrweck/cloak)
-[![Go Report Card](https://goreportcard.com/badge/github.com/lrweck/cloak)](https://goreportcard.com/report/github.com/lrweck/cloak)
+[![Go](https://img.shields.io/badge/go-1.27%2B-007d9c)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A [slog.Handler](https://pkg.go.dev/log/slog#Handler) that masks personal data before it
 reaches your log sink.
