@@ -58,8 +58,10 @@ func TestWithRedactedValueIsOrderIndependent(t *testing.T) {
 		cloak.WithKeys(cloak.Redact, "password"), cloak.WithRedactedValue("***"),
 	}, slog.String("password", "x"))
 
-	if before != after {
-		t.Fatalf("order changed the result:\n before: %s\n after:  %s", before, after)
+	// Both sides are logged, so the two calls land in different milliseconds often enough
+	// to flake. The timestamp is not what this test is about.
+	if stripTime(before) != stripTime(after) {
+		t.Fatalf("order changed the result:\n before: %s\n after:  %s", stripTime(before), stripTime(after))
 	}
 	if !strings.Contains(before, "***") {
 		t.Fatalf("expected the custom message: %s", before)
