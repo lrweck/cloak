@@ -134,3 +134,19 @@ func maskWith(t *testing.T, opts []cloak.Option, args ...any) string {
 	logger.Info("m", args...)
 	return b.String()
 }
+
+// KeepLast(4) and KeepLast(9) share a code pointer. The library must not treat them as
+// the same rule, or one of them would be dropped with no symptom.
+func TestClosuresSharingCodePointerAreDistinct(t *testing.T) {
+	got := maskWith(t, []cloak.Option{
+		cloak.WithKey(cloak.KeepLast(4), "a"),
+		cloak.WithKey(cloak.KeepLast(9), "b"),
+	}, "a", "abcdefghijkl", "b", "xyzabcdefghijkl")
+
+	// Both rules applied: KeepLast(4) keeps four characters, KeepLast(9) keeps nine.
+	for _, want := range []string{"a=********ijkl", "b=******defghijkl"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q, so that neither rule was dropped: %s", want, got)
+		}
+	}
+}

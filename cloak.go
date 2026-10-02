@@ -363,7 +363,15 @@ func (c *config) addContains(part string, m Masker) {
 }
 
 func WithValueFunc(f ValueFunc) Option {
-	return func(c *config) { c.values = append(c.values, f) }
+	return func(c *config) {
+		// A built-in handed over by name is the same function the presets install,
+		// so mark it. Nothing else is compared, for the closure reason above.
+		if b, ok := builtinByPtr[reflect.ValueOf(f).Pointer()]; ok {
+			c.addBuiltins(b)
+			return
+		}
+		c.values = append(c.values, f)
+	}
 }
 
 // DefaultPIIValueFuncs returns the built-in detectors, in the order they must run.
@@ -377,11 +385,62 @@ func WithValueFunc(f ValueFunc) Option {
 // common private address into "***-**-****" and leaves IPv4 nothing to match. Phone
 // is last because it claims almost any number, documents included.
 func DefaultPIIValueFuncs() []ValueFunc {
-	return []ValueFunc{MaskUUID, MaskEmail, MaskIPv4, MaskIBAN, MaskCPF, MaskCNPJ, MaskSSN, MaskPAN, MaskPhone}
+	out := make([]ValueFunc, 0, biCount)
+	for _, f := range builtinFuncs {
+		out = append(out, f)
+	}
+	return out
+}
+
+// builtin identifies one of the library's own detectors. The set is closed, and each
+// member is a package-level function with no captures, which is what makes a bitmask
+// an exact record of what is installed and makes pointer equality meaningful here.
+type builtin uint8
+
+const (
+	biUUID builtin = iota
+	biEmail
+	biIPv4
+	biIBAN
+	biCPF
+	biCNPJ
+	biSSN
+	biPAN
+	biPhone
+	biCount
+)
+
+// builtinFuncs is in detector order, which is what DefaultPIIValueFuncs hands back.
+var builtinFuncs = [biCount]ValueFunc{MaskUUID, MaskEmail, MaskIPv4, MaskIBAN, MaskCPF, MaskCNPJ, MaskSSN, MaskPAN, MaskPhone}
+
+// builtinByPtr identifies a built-in from a function value. Safe only for this set: two
+// closures from the same literal share a code pointer while capturing different values,
+// so comparing user detectors this way would treat KeepLast(4) and KeepLast(9) as the
+// same rule and silently drop one.
+var builtinByPtr = func() map[uintptr]builtin {
+	m := make(map[uintptr]builtin, biCount)
+	for i, f := range builtinFuncs {
+		m[reflect.ValueOf(f).Pointer()] = builtin(i)
+	}
+	return m
+}()
+
+// addBuiltins installs detectors, skipping any already present. Composing two presets
+// would otherwise scan every string twice, which is a plausible mistake given that
+// WithDefaultPII already includes the detectors.
+func (c *config) addBuiltins(bs ...builtin) {
+	for _, b := range bs {
+		bit := uint32(1) << b
+		if c.builtins&bit != 0 {
+			continue
+		}
+		c.builtins |= bit
+		c.values = append(c.values, builtinFuncs[b])
+	}
 }
 
 func WithDefaultPIIValues() Option {
-	return func(c *config) { c.values = append(c.values, DefaultPIIValueFuncs()...) }
+	return func(c *config) { c.addBuiltins(biUUID, biEmail, biIPv4, biIBAN, biCPF, biCNPJ, biSSN, biPAN, biPhone) }
 }
 
 var DefaultPIIKeys = []string{
@@ -410,7 +469,7 @@ func WithDefaultPII() Option {
 		for _, k := range DefaultPIIKeys {
 			c.keys[normalizeKey(k)] = Redact
 		}
-		c.values = append(c.values, DefaultPIIValueFuncs()...)
+		c.addBuiltins(biUUID, biEmail, biIPv4, biIBAN, biCPF, biCNPJ, biSSN, biPAN, biPhone)
 	}
 }
 
@@ -461,7 +520,7 @@ func WithPCI() Option {
 		}
 		// PAN only: the other format detectors are not cardholder data and their
 		// false positives would cost more than they protect here.
-		c.values = append(c.values, MaskPAN)
+		c.addBuiltins(biPAN)
 	}
 }
 
@@ -487,7 +546,7 @@ func WithGDPR() Option {
 		// dotted-quad is nine digits and SSN would swallow it. MaskPhone is left
 		// out because the key list already covers phone fields and its heuristic
 		// would mask IDs and timestamps.
-		c.values = append(c.values, MaskEmail, MaskIPv4, MaskCPF, MaskCNPJ, MaskSSN)
+		c.addBuiltins(biEmail, biIPv4, biCPF, biCNPJ, biSSN)
 	}
 }
 

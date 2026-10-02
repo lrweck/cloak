@@ -88,3 +88,28 @@ func BenchmarkKeyLookup(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkDetectorsComposed(b *testing.B) {
+	s := "payment settled for user 42 in 120ms"
+	cases := []struct {
+		name string
+		opts []Option
+	}{
+		{"once", []Option{WithDefaultPIIValues()}},
+		{"composed", []Option{WithDefaultPII(), WithDefaultPIIValues()}},
+		{"twice", []Option{WithDefaultPII(), WithDefaultPII()}},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			c := &config{keys: make(map[string]Masker), skip: make(map[string]struct{})}
+			for _, o := range tc.opts {
+				o(c)
+			}
+			h := &Handler{cfg: c}
+			b.ReportAllocs()
+			for b.Loop() {
+				h.maskString(s)
+			}
+		})
+	}
+}
