@@ -33,6 +33,19 @@ Toda tabela de README vem de um unico `go test -bench .` run. Duas tabelas de ru
 diferentes produzem deltas que nao fecham, e a prosa herda a diferenca. Ao mexer em
 numeros, regerar tudo e conferir programaticamente.
 
+## Escopo
+
+Só faça o que foi pedido. Se algo parece útil mas ninguém pediu, **pergunte** — não
+construa. Trabalho a mais custa tempo do revisor e mascara o que era importante.
+
+Antes de escrever um teste, um helper ou um check: ele é exigido por algo, ou é
+speculação? Um check que nenhum bug conhecido pode provocar é o pior tipo: parece
+segurança e não é. Antes de aceitar um check como útil, mutar o código que ele
+protege e ver se ele falha — se não falhar, não está protegendo nada.
+
+Da mesma forma: um teste só vale o que a direção que ele **não** prova custa. Dizer o
+que um teste não cobre é parte de escrevê-lo, não uma nota de rodapé.
+
 ## Commits
 
 Um por mudanca. O corpo explica o *por que* e o que foi descartado, nao o diff.
