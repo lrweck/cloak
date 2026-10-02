@@ -1,5 +1,14 @@
 # Benchmarks
 
+How cloak compares with the other libraries that mask PII in Go logs, on the same record
+through the same sink: [compare/](compare/README.md).
+
+```
+cd bench/compare && go test -bench . -benchmem     # needs network on first run
+```
+
+The numbers below are cloak's own, by scenario.
+
 ```
 go test -bench Scenario -benchmem
 go test -bench Scenario -benchmem -benchtime 2s   # steadier numbers

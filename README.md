@@ -512,7 +512,8 @@ not cut mid-character.
 
 ## Performance
 
-Full numbers by scenario in [bench/](bench/README.md).
+Full numbers by scenario in [bench/](bench/README.md), and a comparison against the other
+Go libraries that mask PII in [bench/compare/](bench/compare/README.md).
 
 The short version, each record measured against itself logged straight to `slog`:
 
