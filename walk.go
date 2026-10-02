@@ -259,6 +259,14 @@ func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 		maskedKey, kc := h.walk(key.Interface(), depth+1)
 		maskedValue, vc := h.walk(value.Interface(), depth+1)
 
+		// A key rule names the field, so it masks the value stored under that
+		// name, exactly as walkField does for a struct field. Masking the key
+		// instead would leave the value in the clear, which is the same leak
+		// wearing a hat: map[[REDACTED]:hunter2] protects nothing.
+		if m, ok := h.mapKeyMasker(key); ok && !vc {
+			maskedValue, vc = m(slog.AnyValue(value.Interface())), true
+		}
+
 		kv := key
 		if kc {
 			changed = true
@@ -296,6 +304,15 @@ func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 		return wide, true
 	}
 	return dst.Interface(), true
+}
+
+// mapKeyMasker returns the rule matching a map key. Only a string key can be named
+// by a rule; a struct or pointer key has no name to match.
+func (h *Handler) mapKeyMasker(key reflect.Value) (Masker, bool) {
+	if key.Kind() != reflect.String {
+		return nil, false
+	}
+	return h.cfg.maskerFor(normalizeKey(key.String()))
 }
 
 // loose returns the masked value when there is one, and the original otherwise.
