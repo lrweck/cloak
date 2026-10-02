@@ -31,14 +31,20 @@ type secret struct {
 	Note     string `slog:"-"`
 }
 
+// plain carries nothing a rule here would match, which is what makes it useful: the
+// pointer to it is left exactly as it arrived, address and all.
+type plain struct {
+	Zone string
+}
+
+type holder struct {
+	ID   int
+	Next *plain
+}
+
 func main() {
 	// WithCompositeScan turns on struct, map and slice walking at once. Each one is
 	// also available on its own, scoped to its own shape.
-	//
-	// JSONHandler, not TextHandler: cloak follows pointers, but %+v renders a struct
-	// with a pointer field as the address, so a masked value behind a pointer would
-	// reach the sink as 0x... on a text handler. JSON follows the pointer and shows
-	// the masked fields.
 	logger := slog.New(cloak.New(
 		slog.NewJSONHandler(os.Stdout, nil),
 		cloak.WithCompositeScan(),
@@ -53,6 +59,11 @@ func main() {
 			Street: "Rua das Flores",
 			CEP:    "01310-100",
 		},
+		// The same email as the field above, in a slice this time. A slice element has
+		// no key of its own, so no key rule can reach it and only the email detector
+		// fires, which masks the local part instead of replacing the value:
+		// [REDACTED] above, j***@example.com here. Both are correct, and the difference
+		// is entirely which rule had a name to match.
 		Tags: []string{"admin", "jane@example.com"},
 	}))
 
@@ -74,6 +85,29 @@ func main() {
 	// A value that knows how to log itself is resolved first, then masked, so the
 	// LogValuer decides what gets exposed and the rules still apply to it.
 	logger.Info("valuer", "mail", maskedEmail("jane@example.com"))
+
+	// A text handler, where fmt would render a nested pointer as an address and a
+	// masked value behind it would be invisible. Cloak does not leave the address there:
+	// a struct whose pointer field changed widens to a group, so the mask is visible.
+	// The JSON above is untouched by any of this.
+	text := slog.New(cloak.New(
+		slog.NewTextHandler(os.Stdout, nil),
+		cloak.WithStructScan(),
+		cloak.WithKeys(cloak.Redact, "cep"),
+	))
+	text.Info("text handler", "user", User{
+		ID:     7,
+		Name:   "Jane",
+		ShipTo: &Address{Street: "Rua X", CEP: "01310-100"},
+	})
+	// user.ID=7 user.Name=Jane user.Email="" user.ShipTo="&{Street:Rua X CEP:[REDACTED]}" user.Tags=[]
+
+	// What still shows an address is a pointer whose target nothing matched. Rebuilding
+	// for readability alone would cost the quiet path its pass-through, and fmt behaves
+	// the same way with no cloak involved at all.
+	text.Info("unmatched pointer", "h", holder{ID: 7, Next: &plain{Zone: "east"}})
+	// h="{ID:7 Next:0xc000...}" — the address varies per run; what is stable is that a
+	// struct nothing changed is passed through untouched, and fmt prints it as one value.
 }
 
 type maskedEmail string

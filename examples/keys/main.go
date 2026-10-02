@@ -45,8 +45,9 @@ func main() {
 		"cardNumber", "4111111111111111", // same rule as card_number
 	)
 
-	// Two rules can name the same key. The stronger one wins, so the type rule here
-	// overrides the key rule rather than the other way round.
+	// Two rules can name the same key, and the caller wins. WithDefaultPII() redacts
+	// card_number outright; this option asks for the last four digits instead, and it is
+	// the one that applies. A preset is a default, not an override of what you asked for.
 	redacted := slog.New(cloak.New(
 		slog.NewTextHandler(os.Stdout, nil),
 		cloak.WithDefaultPII(),

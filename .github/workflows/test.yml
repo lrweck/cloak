@@ -17,9 +17,51 @@ jobs:
           go-version-file: go.mod
       - run: go test ./...
       - run: go test -race ./...
-      # The fast key path must never mask less than the regexp it replaces. That is the
-      # one invariant whose violation is a silent leak, so it is fuzzed rather than
-      # trusted. Short runs: the seed corpus carries the load, this only catches the
-      # inputs nobody thought of.
-      - run: go test -run '^$' -fuzz '^FuzzKeyRegexFastPathNeverMasksLess$' -fuzztime=20s .
-      - run: go test -run '^$' -fuzz '^FuzzKeyRegexRuleNoPanic$' -fuzztime=10s .
+
+  # Every Fuzz target in the package, found by listing them rather than by writing the
+  # names out here: the file named two of four, so two of them had never run in CI. One
+  # of the missing pair guards the literal-resolution rewrite, whose failure mode is a
+  # silent leak, which is precisely what the fuzzing exists to prevent.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: fuzz every target in the package
+        run: |
+          targets=$(grep -ho '^func Fuzz[A-Za-z0-9_]*' ./*_test.go | sed 's/^func //' | sort)
+          count=$(echo "$targets" | wc -l)
+          echo "alvos: $count"
+          echo "$targets" | sed 's/^/  /'
+          if [ "$count" -eq 0 ]; then
+            echo "nenhum alvo de fuzz encontrado; este job nao esta protegendo nada"
+            exit 1
+          fi
+          # Short runs on purpose. The seed corpus carries the load; this only catches the
+          # inputs nobody thought of.
+          for t in $targets; do
+            echo "::group::$t"
+            go test -run '^$' -fuzz "^$t\$" -fuzztime=20s . || exit 1
+            echo "::endgroup::"
+          done
+
+  # bench/compare is a separate module, so `go test ./...` from the root never touches
+  # it. That hid the tests which pin the library against its competitors — including the
+  # one asserting which libraries can reach a field inside a struct, where a dependency
+  # shipping the feature is supposed to fail the build.
+  #
+  # Needs network on the first run to fetch the five libraries being compared. GitHub
+  # runners have it; the reason this was not wired up before is not worth repeating.
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: bench/compare/go.mod
+      - working-directory: bench/compare
+        run: go test -race ./...
+      - working-directory: bench/compare
+        run: go vet ./...
