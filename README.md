@@ -518,21 +518,23 @@ The short version, each record measured against itself logged straight to `slog`
 
 | | bare slog | with cloak | delta |
 | --- | --- | --- | --- |
-| 4 attributes, nothing to mask | 472 ns, 0 allocs | 599 ns, 0 allocs | **+127 ns** |
+| 4 attributes, nothing to mask | 527 ns, 0 allocs | 622 ns, 0 allocs | **+95 ns** |
 | key lookup in isolation | — | 11 ns, 0 allocs | — |
 | 9 detectors over clean sentences | — | 180 ns, 0 allocs | — |
-| `slog.Any` with a struct | 751 ns, 1 alloc | 1857 ns, 14 allocs | +1106 ns |
+| `slog.Any` with a struct | 789 ns, 1 alloc | 1572 ns, 6 allocs | +783 ns |
 
 Three things to take from it:
 
-- **The quiet path is cheap and allocation-free.** About 130 ns over bare for a record
+- **The quiet path is cheap and allocation-free.** Under 100 ns over bare for a record
   where nothing matched. Key lookup is a single map hit, and a lookup that misses
-  never materializes the folded key, so even `snake_case` names cost nothing.
+  never materializes the folded key, so even `snake_case` names cost nothing. A walked
+  struct where nothing matched costs nothing either, at any width: the copy and the
+  fallback group are built only once something changes.
 - **A rule that fires is not the expensive part.** Finding the value was. What a match
   costs is the replacement itself — a new string is two allocations, which is the
   floor, and the detector rows sit exactly on it.
 - **Reflection costs an order of magnitude more** and is opt-in for that reason. The
-  1.1–1.8 µs of the walk rows is the price of rebuilding the container: boxing each
+  0.8–1.4 µs of the walk rows is the price of rebuilding the container: boxing each
   element out of reflection, the copy, and the masked strings.
 
 ## Gotchas

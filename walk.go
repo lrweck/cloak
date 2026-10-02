@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"time"
 )
 
 // Walk depth ceiling. A self-referential structure (a linked list, a tree holding a
@@ -67,7 +68,14 @@ func (h *Handler) walk(x any, depth int) (any, bool) {
 		return fmt.Sprintf("%+v", x), false
 	}
 	if lv, ok := x.(slog.LogValuer); ok {
-		return h.walkValue(lv.LogValue().Resolve(), depth+1)
+		// Nothing masked means the LogValuer keeps its own identity and resolves
+		// downstream, so the original is returned rather than the resolution. Only
+		// a change has to be boxed back into an any.
+		out, changed := h.walkValue(lv.LogValue().Resolve(), depth+1)
+		if !changed {
+			return x, false
+		}
+		return out, true
 	}
 	// A value rule before the reflect switch, so it sees the value rather than the
 	// container around it. Skip list is not consulted here: the walk has already
@@ -124,7 +132,12 @@ func (h *Handler) walk(x any, depth int) (any, bool) {
 
 // walkValue handles an already-resolved [slog.Value], so a LogValuer result is masked
 // by the same path as a literal.
-func (h *Handler) walkValue(v slog.Value, depth int) (any, bool) {
+//
+// It returns a [slog.Value] rather than an any: the unchanged result is the value
+// itself, and boxing a 32-byte slog.Value into an any costs an allocation on every
+// field of every struct walked, including the ones nothing matched. The any is
+// rebuilt only where a Go value genuinely came back from reflection.
+func (h *Handler) walkValue(v slog.Value, depth int) (slog.Value, bool) {
 	switch v.Kind() {
 	case slog.KindGroup:
 		src := v.Group()
@@ -160,7 +173,15 @@ func (h *Handler) walkValue(v slog.Value, depth int) (any, bool) {
 
 	case slog.KindAny:
 		// Resolve would hand back the same KindAny forever, so unwrap it.
-		return h.walk(v.Any(), depth+1)
+		out, changed := h.walk(v.Any(), depth+1)
+		if !changed {
+			return v, false
+		}
+		// A walk may hand back a slog.Value (a group) or a rebuilt Go value.
+		if sv, ok := out.(slog.Value); ok {
+			return sv, true
+		}
+		return slog.AnyValue(out), true
 	}
 	return v, false
 }
@@ -196,11 +217,7 @@ func (h *Handler) walkField(name, tag string, v slog.Value, depth int) (slog.Val
 	if !changed {
 		return v, false
 	}
-	sv, ok := out.(slog.Value)
-	if !ok {
-		return slog.AnyValue(out), true
-	}
-	return sv, true
+	return out, true
 }
 
 // walkStruct returns a masked copy of a struct, or the original when nothing matched.
@@ -224,34 +241,58 @@ func (h *Handler) walkField(name, tag string, v slog.Value, depth int) (slog.Val
 // [slog.Value] group carrying the same fields, which logs identically.
 func (h *Handler) walkStruct(v reflect.Value, depth int) (any, bool) {
 	t := v.Type()
-	dst := reflect.New(t).Elem()
 
-	// dirty records that dst no longer equals v, which is not only about masking:
-	// a zeroed field is a change too.
+	// dst is the copy being rebuilt, allocated at the first change rather than up
+	// front, and attrs is the group fallback, built only once the struct cannot
+	// keep its shape. A struct where nothing matched — the common case — must not
+	// pay for a copy or a slice it discards.
+	var dst reflect.Value
+	var attrs []slog.Attr
+	// groupFrom is the first index that has to appear in the group, or -1 while
+	// the struct still has its shape.
+	groupFrom := -1
 	dirty := false
 	shaped := true
-	attrs := make([]slog.Attr, 0, t.NumField())
+
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if !dst.Field(i).CanSet() || f.Tag.Get("slog") == "-" {
+		if f.PkgPath != "" || f.Tag.Get("slog") == "-" {
+			// Unexported, or opted out: dropped rather than copied, because
+			// TextHandler renders a struct with %+v and would print it.
 			dirty = true
+			if !dst.IsValid() {
+				dst = structCopy(v, t, i)
+			}
+			if groupFrom < 0 {
+				groupFrom, attrs = i, groupPrefix(dst, t, i)
+			}
 			continue
 		}
-		out, c := h.walkField(f.Name, h.cfg.tagValue(f), slog.AnyValue(v.Field(i).Interface()), depth+1)
+		fv := v.Field(i)
+		out, c := h.walkField(f.Name, h.cfg.tagValue(f), slog.AnyValue(fv.Interface()), depth+1)
 		if !c {
-			dst.Field(i).Set(v.Field(i))
-			// Unconditional: attrs is the group when the struct cannot keep its
-			// shape, and a field skipped after the shape broke would vanish from
-			// the record. The boxing costs one allocation per field on a path
-			// that already rebuilds; dropping a field costs data.
-			attrs = append(attrs, slog.Any(f.Name, v.Field(i).Interface()))
+			// Unchanged. dst carries the copy only if it was allocated before this
+			// field; structCopy filled in whatever came earlier.
+			if dst.IsValid() {
+				dst.Field(i).Set(fv)
+			}
+			if groupFrom >= 0 {
+				attrs = append(attrs, slog.Any(f.Name, fv.Interface()))
+			}
 			continue
 		}
 		dirty = true
-		attrs = append(attrs, slog.Any(f.Name, out))
-		if cv := convert(out, f.Type); cv.IsValid() {
-			dst.Field(i).Set(cv)
-		} else {
+		if !dst.IsValid() {
+			// Every field below i is unchanged, or dst would already exist, so
+			// copying them from v loses nothing masked.
+			dst = structCopy(v, t, i)
+		}
+		if !maskInto(dst.Field(i), out, f.Type) {
+			// The mask does not fit the declared type, so the struct cannot keep
+			// its shape and the record becomes a group.
+			if groupFrom < 0 {
+				groupFrom, attrs = i, groupPrefix(dst, t, i)
+			}
 			shaped = false
 		}
 		// A changed pointer field widens to the group too. The masking behind it
@@ -261,7 +302,15 @@ func (h *Handler) walkStruct(v reflect.Value, depth int) (any, bool) {
 		// Untouched pointers stay untouched: rebuilding for readability alone
 		// would break the passthrough the quiet path promises.
 		if f.Type.Kind() == reflect.Pointer {
+			if groupFrom < 0 {
+				groupFrom, attrs = i, groupPrefix(dst, t, i)
+			}
 			shaped = false
+		}
+		// Appended last, so it lands after the prefix groupPrefix may just have
+		// built, and only while the group is in play at all.
+		if groupFrom >= 0 {
+			attrs = append(attrs, slog.Any(f.Name, out))
 		}
 	}
 	if !dirty {
@@ -271,6 +320,29 @@ func (h *Handler) walkStruct(v reflect.Value, depth int) (any, bool) {
 		return slog.GroupValue(attrs...), true
 	}
 	return dst.Interface(), true
+}
+
+// structCopy returns an addressable struct of t with v's fields [0,i) copied, so a
+// rebuild that starts at i inherits the fields it has not rewritten. No index below i
+// can be unexported: the walk stops at the first one, so the copies all succeed.
+func structCopy(v reflect.Value, t reflect.Type, i int) reflect.Value {
+	dst := reflect.New(t).Elem()
+	for j := range i {
+		dst.Field(j).Set(v.Field(j))
+	}
+	return dst
+}
+
+// groupPrefix boxes the fields a struct has already decided, for the moment it loses
+// its shape. dst holds the right value for every index below i — the shape cannot
+// have survived past the first unrepresentable field — so the prefix is rebuilt from
+// the copy rather than from a second walk.
+func groupPrefix(dst reflect.Value, t reflect.Type, i int) []slog.Attr {
+	attrs := make([]slog.Attr, 0, t.NumField())
+	for j := range i {
+		attrs = append(attrs, slog.Any(t.Field(j).Name, dst.Field(j).Interface()))
+	}
+	return attrs
 }
 
 // walkMap masks both keys and values, so "email" -> "john@example.com" is caught by
@@ -414,6 +486,69 @@ func (h *Handler) walkSlice(v reflect.Value, depth int) (any, bool) {
 		return wide, true
 	}
 	return dst.Interface(), true
+}
+
+// maskInto stores a masked value into a field of the declared type, reporting whether
+// it fit. It is convert plus the Set, with the kinds slog can hold written straight
+// from the kind: convert would box the value into an any and read it back out, two
+// allocations the common scalar cases never need.
+//
+// Only the predeclared types take the direct path. Anything else — a named string
+// type, an interface — falls through to convert, which decides by assignability, so
+// the two cannot disagree about what fits.
+func maskInto(field reflect.Value, sv slog.Value, t reflect.Type) bool {
+	if setScalar(field, sv, t) {
+		return true
+	}
+	cv := convert(sv, t)
+	if !cv.IsValid() {
+		return false
+	}
+	field.Set(cv)
+	return true
+}
+
+// setScalar writes a [slog.Value] into a field of exactly the type slog.Value.Any
+// would have returned for that kind. Named types and interfaces return false.
+func setScalar(field reflect.Value, sv slog.Value, t reflect.Type) bool {
+	switch sv.Kind() {
+	case slog.KindString:
+		if t == reflect.TypeFor[string]() {
+			field.SetString(sv.String())
+			return true
+		}
+	case slog.KindInt64:
+		if t == reflect.TypeFor[int64]() {
+			field.SetInt(sv.Int64())
+			return true
+		}
+	case slog.KindUint64:
+		if t == reflect.TypeFor[uint64]() {
+			field.SetUint(sv.Uint64())
+			return true
+		}
+	case slog.KindFloat64:
+		if t == reflect.TypeFor[float64]() {
+			field.SetFloat(sv.Float64())
+			return true
+		}
+	case slog.KindBool:
+		if t == reflect.TypeFor[bool]() {
+			field.SetBool(sv.Bool())
+			return true
+		}
+	case slog.KindDuration:
+		if t == reflect.TypeFor[time.Duration]() {
+			field.SetInt(int64(sv.Duration()))
+			return true
+		}
+	case slog.KindTime:
+		if t == reflect.TypeFor[time.Time]() {
+			field.Set(reflect.ValueOf(sv.Time()))
+			return true
+		}
+	}
+	return false
 }
 
 // convert turns a walked value back into the type the container requires, so a struct

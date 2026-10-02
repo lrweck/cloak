@@ -28,25 +28,34 @@ bare handler and through cloak; the delta is the masking.
 
 | Scenario | bare slog | with cloak | delta | what it exercises |
 | --- | --- | --- | --- | --- |
-| `no_pii_text` | 472 ns, 0 allocs | 599 ns, 0 allocs | **+127 ns** | nothing matched |
-| `key_only_no_detectors` | 458 ns, 0 allocs | 675 ns, 0 allocs | +217 ns | 102 key rules, no format scan |
-| `key_rule_fires` | 402 ns, 0 allocs | 542 ns, 0 allocs | +140 ns | one key rule redacting |
-| `detector_fires` | 461 ns, 0 allocs | 844 ns, 2 allocs | +383 ns | the email detector matching |
-| `preset_mixed_record` | 630 ns, 0 allocs | 914 ns, 0 allocs | +284 ns | keys and detectors together |
-| `preset_wide_record` | 1534 ns, 1 alloc | 2866 ns, 2 allocs | +1332 ns | 20 attributes, mostly unmatched |
-| `groups_nested` | 704 ns, 0 allocs | 1323 ns, 4 allocs | +619 ns | two nested groups |
-| `struct_walk` | 751 ns, 1 alloc | 1857 ns, 14 allocs | +1106 ns | `slog.Any` with a struct |
-| `map_walk` | 1289 ns, 10 allocs | 3040 ns, 28 allocs | +1751 ns | `slog.Any` with a map |
-| `slice_walk` | 696 ns, 1 alloc | 2209 ns, 19 allocs | +1513 ns | `slog.Any` with a slice |
-| `message_scan` | 477 ns, 0 allocs | 896 ns, 2 allocs | +419 ns | an email inside the message |
-| `context_attrs` | 395 ns, 0 allocs | 2081 ns, 17 allocs | +1686 ns | a masked pull on every record |
+| `no_pii_text` | 527 ns, 0 allocs | 622 ns, 0 allocs | **+95 ns** | nothing matched |
+| `key_only_no_detectors` | 469 ns, 0 allocs | 690 ns, 0 allocs | +221 ns | 102 key rules, no format scan |
+| `key_rule_fires` | 424 ns, 0 allocs | 568 ns, 0 allocs | +144 ns | one key rule redacting |
+| `detector_fires` | 418 ns, 0 allocs | 831 ns, 2 allocs | +413 ns | the email detector matching |
+| `preset_mixed_record` | 659 ns, 0 allocs | 975 ns, 0 allocs | +316 ns | keys and detectors together |
+| `preset_wide_record` | 1557 ns, 1 alloc | 2819 ns, 2 allocs | +1262 ns | 20 attributes, mostly unmatched |
+| `groups_nested` | 722 ns, 0 allocs | 1153 ns, 4 allocs | +431 ns | two nested groups |
+| `struct_walk` | 789 ns, 1 alloc | 1572 ns, 6 allocs | +783 ns | `slog.Any` with a struct |
+| `map_walk` | 1305 ns, 10 allocs | 2676 ns, 27 allocs | +1371 ns | `slog.Any` with a map |
+| `slice_walk` | 703 ns, 1 alloc | 2110 ns, 19 allocs | +1407 ns | `slog.Any` with a slice |
+| `message_scan` | 424 ns, 0 allocs | 934 ns, 2 allocs | +510 ns | an email inside the message |
+| `context_attrs` | 461 ns, 0 allocs | 1647 ns, 8 allocs | +1186 ns | a masked pull on every record |
 
 ### What the numbers say
 
 **The quiet path is cheap and allocation-free.** A record with nothing to mask costs
-about 130 ns over a bare `slog` handler and allocates nothing. Most of the delta is
+under 100 ns over a bare `slog` handler and allocates nothing. Most of the delta is
 `normalizeKey` and the map lookup that follows it — and since the lookup that misses
 never materializes the folded form, even `snake_case` keys cost no allocation.
+
+**A composite where nothing matches is free too.** Walking a struct used to box every
+field into a group it then discarded, plus a folded key and a rebuild copy: a per-field
+toll that showed up at 8–9 allocations for a four-field struct. The copy and the group
+are now built only once something changes or the shape breaks, and a struct whose fields
+are all exported costs nothing over the bare handler at any width.
+`TestPassthroughStructCostDoesNotGrowWithWidth` pins that by comparing a 2-field struct
+against a 20-field one, so the check is about the slope rather than a fixed number that
+would drift with the sink.
 
 **Key lookup alone is 11 ns.** `BenchmarkKeyLookup` measures the lookup in isolation:
 one map hit, no allocation.
@@ -77,12 +86,17 @@ Nine detectors over six sentences that hold none of them costs about 180 ns, and
 the pre-filter is what makes the composition affordable.
 
 **Reflection is opt-in and clearly marked.** `WithStructScan`, `WithMapScan` and
-`WithSliceScan` cost 1.1–1.8 µs over bare, an order of magnitude above the key path.
+`WithSliceScan` cost 0.8–1.4 µs over bare, an order of magnitude above the key path.
 The price is the copy: boxing each element out of reflection, the rebuilt container,
 and the masked strings themselves. Without one of them, `reflect` is never called on
 the logging path at all (`TestReadmeCompositeOptionsAreOptIn` and `walkCalls` pin
-that). Note the bare column for `map_walk`: 10 of the 28 allocations belong to the
+that). Note the bare column for `map_walk`: 10 of the 27 allocations belong to the
 JSON sink marshaling the map, not to the masking.
+
+**Maps and slices still rebuild eagerly.** `walkMap` and `walkSlice` allocate the
+rebuilt container and the wide fallback before knowing whether anything matched, which
+is why their passthrough cost still grows with the entry count while the struct's does
+not. Same fix, not yet applied.
 
 ## Scaling with record width
 
@@ -91,11 +105,11 @@ attribute.
 
 | Attributes | bare slog | key rules | delta | per attribute |
 | --- | --- | --- | --- | --- |
-| 1 | 438 ns | 526 ns | +88 ns | 88 ns |
-| 5 | 697 ns | 1009 ns | +312 ns | 62 ns |
-| 10 | 951 ns | 1462 ns | +511 ns | 51 ns |
-| 20 | 1504 ns | 2897 ns | +1393 ns | 70 ns |
-| 50 | 3394 ns | 6810 ns | +3416 ns | 68 ns |
+| 1 | 446 ns | 545 ns | +99 ns | 99 ns |
+| 5 | 607 ns | 887 ns | +280 ns | 56 ns |
+| 10 | 968 ns | 1474 ns | +506 ns | 51 ns |
+| 20 | 1520 ns | 2765 ns | +1245 ns | 62 ns |
+| 50 | 3398 ns | 6770 ns | +3372 ns | 67 ns |
 
 The cost is linear in the number of attributes at about 50–70 ns each, with zero
 allocations up to ten attributes. There is no cliff: records wider than the 16-slot
