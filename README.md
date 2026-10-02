@@ -337,9 +337,8 @@ What to expect:
 Reflection runs only when a composite option is on. Without one, `reflect` is never called
 on the logging path.
 
-This is the capability most of the field does not have, and it is measured rather than
-asserted in [bench/compare/](bench/compare/README.md) — the same record through every
-library, each configured as well as it can be configured for it:
+This is not a capability every masking library has. Measured in
+[bench/compare/](bench/compare/README.md), on the same record through each library:
 
 | Library | Reaches a field inside `slog.Any`? |
 | --- | --- |
@@ -348,11 +347,8 @@ library, each configured as well as it can be configured for it:
 | redactlog | no — its path DSL walks `slog.Group` and stops there |
 | go-slog-redact, sensitive, alesr/redact | no — they match a top-level key against a string value |
 
-The distinction between the first two rows and the last is worth being exact about,
-because one library does have a path DSL and it is a good one: `RedactPaths: ["user"]`
-keeps the password out of the sink and satisfies any grep for it — by masking the entire
-value, so the user id goes too. Masking a field and dropping a value are not the same
-job, and only one of them leaves the record useful.
+Given a struct, redactlog's only option is `RedactPaths: ["user"]`, which masks the whole
+value. Nothing leaks and the user id goes with it.
 
 ### LogValuer
 
@@ -541,12 +537,9 @@ The short version, each record measured against itself logged straight to `slog`
 | 9 detectors over clean sentences | — | 180 ns, 0 allocs | — |
 | `slog.Any` with a struct | 785 ns, 1 alloc | 1549 ns, 6 allocs | +764 ns |
 
-That last row is the only capability not every masking library has. Against the one
-other library that can be configured for it, cloak is **1.95 times cheaper and allocates
-a twelfth as much** — 1754 ns and 5 allocations against masq's 3424 ns and 63. The three
-that cannot reach the field are not in that table, because a configuration that quietly
-does nothing reads as a very fast winner; [what each of them does when handed the record
-anyway is here](bench/compare/README.md).
+On that row cloak is **1.95 times cheaper than the one other library that can be
+configured for it, and allocates a twelfth as much** — 1754 ns and 5 allocations against
+masq's 3424 ns and 63.
 
 Three things to take from it:
 
