@@ -3,6 +3,7 @@ package cloak_test
 import (
 	"bytes"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -194,12 +195,7 @@ func logWithRule(r cloak.ValueRule, args ...any) string {
 }
 
 func slicesContains(s []string, want string) bool {
-	for _, v := range s {
-		if v == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, want)
 }
 
 func logWithOpts(opts []cloak.Options, args ...any) string {

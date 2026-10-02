@@ -121,11 +121,11 @@ func goFieldName(key string) string {
 // structFieldValue pulls the value out of the `v={Name:Value}` a TextHandler writes.
 func structFieldValue(line string) string {
 	const prefix = "v={"
-	i := strings.Index(line, prefix)
-	if i < 0 {
+	_, after, ok := strings.Cut(line, prefix)
+	if !ok {
 		return "<no field>"
 	}
-	rest := strings.TrimRight(line[i+len(prefix):], "\n")
+	rest := strings.TrimRight(after, "\n")
 	return valueAfterColon(strings.TrimSuffix(rest, "}"))
 }
 
@@ -134,11 +134,11 @@ func structFieldValue(line string) string {
 // suffix of a masked value like [REDACTED] inside it survives.
 func mapFieldValue(line string) string {
 	const prefix = "v=map["
-	i := strings.Index(line, prefix)
-	if i < 0 {
+	_, after, ok := strings.Cut(line, prefix)
+	if !ok {
 		return "<no field>"
 	}
-	rest := strings.TrimRight(line[i+len(prefix):], "\n")
+	rest := strings.TrimRight(after, "\n")
 	return valueAfterColon(strings.TrimSuffix(rest, "]"))
 }
 

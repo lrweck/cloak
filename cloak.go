@@ -1461,7 +1461,7 @@ func validUUID(s string) bool {
 	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
 		return false
 	}
-	for i := 0; i < 36; i++ {
+	for i := range 36 {
 		if i == 8 || i == 13 || i == 18 || i == 23 {
 			continue
 		}
