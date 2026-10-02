@@ -1,0 +1,136 @@
+package cloak_test
+
+import (
+	"bytes"
+	"log/slog"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/lrweck/cloak"
+)
+
+// Declaring the same rule twice must not scan twice, and must not change which rule
+// applies. Every keyed rule replaces: a new rule for a key already present takes over,
+// at the position it already had.
+func TestRepeatedRulesReplaceRatherThanAccumulate(t *testing.T) {
+	t.Run("substring", func(t *testing.T) {
+		got := maskWith(t, []cloak.Option{
+			cloak.WithKeyContains(cloak.Redact, "pass"),
+			cloak.WithKeyContains(cloak.Redact, "pass"),
+			cloak.WithKeyContains(cloak.Redact, "pass"),
+		}, "Password", "p1")
+		if strings.Count(got, "[REDACTED]") != 1 {
+			t.Fatalf("expected one redaction: %s", got)
+		}
+	})
+
+	t.Run("pattern", func(t *testing.T) {
+		got := maskWith(t, []cloak.Option{
+			cloak.WithKeyRegex(`_key$`, cloak.Redact),
+			cloak.WithKeyRegex(`_key$`, cloak.Redact),
+		}, "api_key", "k1", "other", "k2")
+		if strings.Count(got, "[REDACTED]") != 1 {
+			t.Fatalf("expected one redaction: %s", got)
+		}
+		if !strings.Contains(got, "k2") {
+			t.Errorf("unrelated key must survive: %s", got)
+		}
+	})
+
+	t.Run("tag", func(t *testing.T) {
+		got := maskWith(t, []cloak.Option{
+			cloak.WithStructScan(),
+			cloak.WithTag("cloak", "secret", cloak.Redact),
+			cloak.WithTag("cloak", "secret", cloak.Redact),
+		}, slog.Any("v", tagged{Password: "hunter2"}))
+		if strings.Count(got, "[REDACTED]") != 1 {
+			t.Fatalf("expected one redaction: %s", got)
+		}
+	})
+
+	t.Run("string and precompiled are the same rule", func(t *testing.T) {
+		got := maskWith(t, []cloak.Option{
+			cloak.WithKeyRegex(`_key$`, cloak.Redact),
+			cloak.WithKeyRegexp(regexp.MustCompile(`_key$`), cloak.Redact),
+		}, "api_key", "k1")
+		if strings.Count(got, "[REDACTED]") != 1 {
+			t.Fatalf("expected one redaction: %s", got)
+		}
+	})
+}
+
+// The newest masker wins for the same rule, which is what a map does everywhere else
+// in the library.
+func TestLastMaskerWins(t *testing.T) {
+	cases := []struct {
+		name string
+		opts []cloak.Option
+		key  string
+		val  any
+		want string
+	}{
+		{
+			"substring",
+			[]cloak.Option{cloak.WithKeyContains(cloak.Redact, "pw"), cloak.WithKeyContains(cloak.KeepLast(2), "pw")},
+			"pw", "hunter2", "*****r2",
+		},
+		{
+			"pattern",
+			[]cloak.Option{cloak.WithKeyRegex(`^pw$`, cloak.Redact), cloak.WithKeyRegex(`^pw$`, cloak.KeepLast(2))},
+			"pw", "hunter2", "*****r2",
+		},
+		{
+			"exact key, for comparison",
+			[]cloak.Option{cloak.WithKey(cloak.Redact, "pw"), cloak.WithKey(cloak.KeepLast(2), "pw")},
+			"pw", "hunter2", "*****r2",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := maskWith(t, tc.opts, tc.key, tc.val)
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("want %q, got %s", tc.want, got)
+			}
+		})
+	}
+}
+
+// Two different substring rules must both stay, and their relative order decides the
+// winner — deduplication must not turn the list into a set.
+func TestDistinctRulesKeepTheirOrder(t *testing.T) {
+	got := maskWith(t, []cloak.Option{
+		cloak.WithKeyContains(cloak.KeepLast(2), "pass"),
+		cloak.WithKeyContains(cloak.Redact, "secret"),
+	}, "user_password_secret", "hunter2")
+
+	// "pass" is registered first and both parts match, so it wins.
+	if !strings.Contains(got, "*****r2") {
+		t.Fatalf("the first matching rule should win: %s", got)
+	}
+}
+
+// The same holds for patterns: two distinct patterns both stay registered.
+func TestDistinctPatternsBothStay(t *testing.T) {
+	got := maskWith(t, []cloak.Option{
+		cloak.WithKeyRegex(`_key$`, cloak.Redact),
+		cloak.WithKeyRegex(`^x-`, cloak.KeepLast(2)),
+	}, "x-api_key", "abcdef", "other", "zz")
+
+	if strings.Contains(got, "abcdef") || !strings.Contains(got, "zz") {
+		t.Fatalf("unexpected: %s", got)
+	}
+	// Two patterns match x-api_key; the first registered decides.
+	if strings.Count(got, "REDACTED") != 1 {
+		t.Fatalf("expected exactly one rule to apply: %s", got)
+	}
+}
+
+// maskWith logs one record under the given options and returns the output.
+func maskWith(t *testing.T, opts []cloak.Option, args ...any) string {
+	t.Helper()
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), opts...))
+	logger.Info("m", args...)
+	return b.String()
+}

@@ -159,7 +159,22 @@ func WithKeyRegexp(re *regexp.Regexp, m Masker) Option {
 	// Resolved here rather than when the option is applied, so the pattern is
 	// parsed and classified exactly once, whichever constructor is used.
 	key := newRegexKey(re, m)
-	return func(c *config) { c.regexKeys = append(c.regexKeys, key) }
+	return func(c *config) { c.addRegexKey(re.String(), key) }
+}
+
+// addRegexKey registers a pattern rule, replacing one already registered for the same
+// pattern. Only the masker changes: the pattern is identical, so its resolved literals
+// and fold flag are still correct.
+func (c *config) addRegexKey(pattern string, key regexKey) {
+	if i, ok := c.regexIdx[pattern]; ok {
+		c.regexKeys[i].masker = key.masker
+		return
+	}
+	if c.regexIdx == nil {
+		c.regexIdx = make(map[string]int)
+	}
+	c.regexIdx[pattern] = len(c.regexKeys)
+	c.regexKeys = append(c.regexKeys, key)
 }
 
 // maskerForKey returns the rule covering a key, given the name as written and its

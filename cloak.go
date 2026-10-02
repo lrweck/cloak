@@ -99,7 +99,18 @@ type config struct {
 	typeMasks map[reflect.Type]Masker
 	// regexKeys are key patterns, resolved at configuration time.
 	regexKeys []regexKey
+	// Indexes so a rule declared twice replaces rather than accumulates. Each holds
+	// the position in its slice: that keeps the first matching rule winning between
+	// distinct patterns, while the newest masker wins for the same one.
+	containsIdx map[string]int
+	tagIdx      map[tagID]int
+	regexIdx    map[string]int
+	// builtins tracks which of the library's own detectors are installed, so a
+	// preset composed twice does not scan twice.
+	builtins uint32
 }
+
+type tagID struct{ key, value string }
 
 type tagMask struct {
 	key, value string
@@ -212,9 +223,21 @@ func WithContain(secrets ...string) Option {
 // Rules for different tag keys can coexist, since the key is part of each rule. A field
 // matching no rule is walked normally.
 func WithTag(key, value string, m Masker) Option {
-	return func(c *config) {
-		c.tagMasks = append(c.tagMasks, tagMask{key: key, value: value, masker: m})
+	return func(c *config) { c.addTag(tagID{key, value}, m) }
+}
+
+// addTag registers a tag rule, replacing one already registered for the same tag key
+// and value.
+func (c *config) addTag(id tagID, m Masker) {
+	if i, ok := c.tagIdx[id]; ok {
+		c.tagMasks[i].masker = m
+		return
 	}
+	if c.tagIdx == nil {
+		c.tagIdx = make(map[tagID]int)
+	}
+	c.tagIdx[id] = len(c.tagMasks)
+	c.tagMasks = append(c.tagMasks, tagMask{key: id.key, value: id.value, masker: m})
 }
 
 // maskerForTag returns the rule matching a field's tag value, if any.
@@ -318,9 +341,25 @@ func WithKey(m Masker, keys ...string) Option {
 func WithKeyContains(m Masker, keys ...string) Option {
 	return func(c *config) {
 		for _, k := range keys {
-			c.contains = append(c.contains, rule{part: normalizeKey(k), masker: m})
+			c.addContains(normalizeKey(k), m)
 		}
 	}
+}
+
+// addContains registers a substring rule, replacing one already registered for the
+// same part. Replacing rather than appending means the rule cannot be scanned twice,
+// and the newest masker is the one that applies — the same last-wins behaviour
+// WithKey already has, since it is a map.
+func (c *config) addContains(part string, m Masker) {
+	if i, ok := c.containsIdx[part]; ok {
+		c.contains[i].masker = m
+		return
+	}
+	if c.containsIdx == nil {
+		c.containsIdx = make(map[string]int)
+	}
+	c.containsIdx[part] = len(c.contains)
+	c.contains = append(c.contains, rule{part: part, masker: m})
 }
 
 func WithValueFunc(f ValueFunc) Option {
