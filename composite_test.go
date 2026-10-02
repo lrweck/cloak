@@ -246,9 +246,11 @@ func TestOptionsAreIndependent(t *testing.T) {
 			masked: "a***@example.com",
 		},
 		{
+			// "contact" is not a default key, so the detector is what masks the
+			// value — which is the point: the scan had to reach inside the map.
 			name:   "composite covers maps",
 			opts:   compositeOpts(cloak.WithCompositeScan()),
-			attr:   slog.Any("v", map[string]any{"mail": "a@example.com"}),
+			attr:   slog.Any("v", map[string]any{"contact": "a@example.com"}),
 			masked: "a***@example.com",
 		},
 	}
@@ -299,10 +301,21 @@ func TestLogValuerTakesPrecedenceThenMasked(t *testing.T) {
 			masked: "[REDACTED]",
 		},
 		{
+			// "contact" is not a default key, so this proves the LogValuer inside a
+			// map was resolved and its output masked by the detector.
 			name:   "map value",
 			opts:   compositeOpts(cloak.WithMapScan()),
-			attr:   slog.Any("v", map[string]any{"mail": resolved{raw: "john@example.com"}}),
+			attr:   slog.Any("v", map[string]any{"contact": resolved{raw: "john@example.com"}}),
 			masked: "j***@example.com",
+		},
+		{
+			// Mirrors "struct field, key rule beats value detector" above: the
+			// same rule over the same name has to answer the same way wherever the
+			// name lives.
+			name:   "map value, key rule beats value detector",
+			opts:   compositeOpts(cloak.WithMapScan()),
+			attr:   slog.Any("v", map[string]any{"email": resolved{raw: "john@example.com"}}),
+			masked: "[REDACTED]",
 		},
 		{
 			name:   "slice element",

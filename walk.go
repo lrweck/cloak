@@ -292,14 +292,30 @@ func (h *Handler) walkMap(v reflect.Value, depth int) (any, bool) {
 	// protocol rather than a manual MapRange loop.
 	for key, value := range v.Seq2() {
 		maskedKey, kc := h.walk(key.Interface(), depth+1)
-		maskedValue, vc := h.walk(value.Interface(), depth+1)
 
-		// A key rule names the field, so it masks the value stored under that
-		// name, exactly as walkField does for a struct field. Masking the key
-		// instead would leave the value in the clear, which is the same leak
-		// wearing a hat: map[[REDACTED]:hunter2] protects nothing.
-		if m, ok := h.mapKeyMasker(key); ok && !vc {
+		// The key rule first, exactly as walkField does for a struct field, and
+		// for the same reason: the name is the most specific statement of intent,
+		// so it must not depend on whether a detector also happened to match.
+		// Running the value first made map{"email": "a@b.com"} log a partially
+		// masked address while struct{Email: "a@b.com"} logged the redaction the
+		// preset asked for — the same rule over the same name, two answers.
+		//
+		// A key rule masks the value stored under the name, never the name:
+		// masking the key would leave the value in the clear, which is the same
+		// leak wearing a hat — map[[REDACTED]:hunter2] protects nothing.
+		var maskedValue any
+		vc := false
+		switch m, named := h.mapKeyMasker(key); {
+		case named:
 			maskedValue, vc = m(slog.AnyValue(value.Interface())), true
+		case key.Kind() == reflect.String && h.cfg.skipKey(key.String()):
+			// The name was excluded from the value scan, as in walkField. The
+			// order matches too: an explicit rule beats the skip list, so only an
+			// entry no rule claimed is left alone here.
+			maskedValue = value.Interface()
+		default:
+			// No name for the entry, so the value detectors and rules decide.
+			maskedValue, vc = h.walk(value.Interface(), depth+1)
 		}
 
 		kv := key

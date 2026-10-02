@@ -82,13 +82,16 @@ func TestDefaultPresetReachesMapKeys(t *testing.T) {
 	}
 }
 
-// A key rule wins over the value detectors, as everywhere else.
+// A key rule wins over the value detectors, as everywhere else. KeepFirst(1) keeps
+// one character and masks the rest, so "j***************" is the key rule's answer;
+// "j***@example.com" would be the email detector's, and would mean the detector ran
+// first and the key rule never got the chance.
 func TestKeyRuleBeatsDetectorOnMapValue(t *testing.T) {
 	got := logWith(compositeOpts(cloak.WithMapScan(), cloak.WithKeys(cloak.KeepFirst(1), "email")),
 		func(l *slog.Logger) {
 			l.Info("m", "m", map[string]string{"email": "john@example.com"})
 		})
-	if !strings.Contains(got, "j***@example.com") {
+	if !strings.Contains(got, "j***************") {
 		t.Errorf("the key rule should have masked the whole value: %s", got)
 	}
 }

@@ -94,6 +94,12 @@ through.
    as `HandlerOptions.ReplaceAttr`. Cloak is a handler wrapper instead, because
    `ReplaceAttr` cannot scan the message or pull values from the context. Offering both
    would mean supporting the weaker half.
+9. **One precedence, in every container.** The map path ran the value detectors before
+   the key rule, so `map{"email": "a@b.com"}` logged the detector's partial mask while
+   `struct{Email: "a@b.com"}` logged the preset's redaction — the same rule over the
+   same name, two answers. The skip list was ignored in maps for the same reason. Both
+   now match the field path, and `TestMapAndStructAgreeOnEveryRule` compares them across
+   every rule kind so they cannot drift apart again.
 
 ## Gaps still open, in the order I would take them
 

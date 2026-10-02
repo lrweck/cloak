@@ -760,6 +760,18 @@ func WithGDPR() Options {
 	})
 }
 
+// WithSkipValueScan keeps the value detectors off a set of keys, so a field that
+// legitimately holds something shaped like PII keeps its payload readable.
+//
+//	cloak.WithSkipValueScan("raw_payload", "request_body")
+//
+// The key names are matched like any other key rule, so the spelling does not have
+// to match exactly. It applies wherever the name can appear: an attribute, a struct
+// field, or an entry in a walked map.
+//
+// An explicit rule beats the skip list, the same way it beats everything else — a
+// key named here and also named by [WithKeys] or a preset is masked, since the
+// explicit statement is the more specific one.
 func WithSkipValueScan(keys ...string) Options {
 	return option(func(c *config) {
 		for _, k := range keys {

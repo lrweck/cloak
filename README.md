@@ -90,6 +90,10 @@ Three consequences fall out of it:
   four digits instead of the full redaction the preset would apply.
 - **Rules reach inside data.** Once a composite option is on, struct fields, map values
   and slice elements each go through the whole pipeline.
+- **A name means the same thing wherever it lives.** A struct field and a map entry walk
+  through different code, but the same rules over the same name answer the same way —
+  `WithSkipValueScan("payload")` is honoured in a map exactly as in a field.
+  `TestMapAndStructAgreeOnEveryRule` compares the two paths so they cannot drift again.
 - **`slog.LogValuer` is resolved first.** A value that knows how to log itself has
   already decided what it exposes, so that is what gets masked.
 
