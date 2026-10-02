@@ -11,6 +11,15 @@ import (
 
 // A constructor must be exactly its option followed by nothing, so that a caller can
 // override any part of the preset.
+// stripTime drops the record timestamp, which differs between two calls and would
+// make an otherwise exact comparison flaky.
+func stripTime(out string) string {
+	if _, rest, ok := strings.Cut(out, "level="); ok {
+		return rest
+	}
+	return out
+}
+
 func TestConstructorsMatchTheirOptions(t *testing.T) {
 	cases := []struct {
 		name string
@@ -35,9 +44,8 @@ func TestConstructorsMatchTheirOptions(t *testing.T) {
 			base2 := slog.NewTextHandler(&viaOpt, nil)
 			slog.New(cloak.New(base2, tc.opt, cloak.WithMapScan())).Info("m", tc.attr)
 
-			if viaCtor.String() != viaOpt.String() {
-				t.Errorf("constructor differs from the option:\n ctor: %s\n opt:  %s",
-					viaCtor.String(), viaOpt.String())
+			if got, want := stripTime(viaCtor.String()), stripTime(viaOpt.String()); got != want {
+				t.Errorf("constructor differs from the option:\n ctor: %s\n opt:  %s", got, want)
 			}
 		})
 	}

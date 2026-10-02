@@ -17,3 +17,9 @@ jobs:
           go-version: '1.27'
       - run: go test ./...
       - run: go test -race ./...
+      # The fast key path must never mask less than the regexp it replaces. That is the
+      # one invariant whose violation is a silent leak, so it is fuzzed rather than
+      # trusted. Short runs: the seed corpus carries the load, this only catches the
+      # inputs nobody thought of.
+      - run: go test -run '^$' -fuzz '^FuzzKeyRegexFastPathNeverMasksLess$' -fuzztime=20s .
+      - run: go test -run '^$' -fuzz '^FuzzKeyRegexRuleNoPanic$' -fuzztime=10s .
