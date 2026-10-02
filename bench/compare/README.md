@@ -6,7 +6,7 @@ typed:
 ```
 cd bench/compare
 go test -bench . -benchmem
-go test -v -run 'TestEveryLibrary|TestScenario|TestBoth|TestKeyOnly'   # the correctness checks
+go test -v -run 'TestEveryLibrary|TestScenario|TestBoth|TestKeyOnly|TestNestedStruct'
 ```
 
 It is a separate module on purpose. Cloak has no dependencies and this is the only place
@@ -15,105 +15,108 @@ network access on the first run, so it is not wired into CI.
 
 ## What is being compared
 
-Two sections. First a synthetic baseline of key-based masking — the one thing every
-library does — configured with `password`, `email` and `card_number`, on two records:
+Six records, in two groups.
 
-- **clean** — nothing to mask: `user_id`, `status`, `latency_ms`, `route`. What most
-  log lines are.
+**A synthetic baseline** of key-based masking — the one thing every library here does —
+configured with `password`, `email` and `card_number`:
+
+- **clean** — nothing to mask: `user_id`, `status`, `latency_ms`, `route`.
 - **secret** — one key rule fires: `user_id`, `password`, `status`.
 
-Then three records a real service writes, each configured for the libraries that can
-honestly be configured for it.
+**Four records a real service writes**, each configured for the libraries that can
+honestly be configured for it:
 
-Both write JSON to `io.Discard`, so the numbers are the handler chain plus the masking,
-not I/O. The built-in `time` attribute is present, as it is in production.
+- **http_request** — the most common record there is: request id, method, route, status,
+  latency, client address, user agent, one real email.
+- **payment_authorization** — a card number under a key nobody configured, beside numbers
+  that only look like one.
+- **background_job** — eight ordinary attributes and nothing sensitive, under a
+  production configuration. What a service owner is really asking about.
+- **nested_struct** — the two secrets inside one struct logged with `slog.Any`, which is
+  what a service does when it hands a domain object to slog whole.
 
-Every library is verified to actually mask before its speed is reported.
-`TestEveryLibraryMasks` fails if `hunter2` reaches the sink, and
-`TestScenarioEveryParticipantFindsTheCard` does the same for content detection.
-Benchmarking a configuration that quietly does nothing would read as a very fast winner.
+All six write JSON to `io.Discard`, so the numbers are the handler chain plus the
+masking, not I/O. The built-in `time` attribute is present, as it is in production.
+
+`bare` is the same record through a plain `JSONHandler`, so the delta column is what the
+masking costs. Every library is verified to actually mask before its speed is reported:
+`TestEveryLibraryMasks` fails if `hunter2` reaches the sink,
+`TestScenarioEveryParticipantFindsTheCard` does the same for content detection, and
+`TestNestedStructNobodyLeaksThePassword` for the struct. Benchmarking a configuration
+that quietly does nothing would read as a very fast winner.
+
+`masq` appears twice. It deep-clones whatever it is handed, including the built-in time
+attribute, so its default configuration is an outlier by two orders of magnitude. The
+second row is the same library with the escape hatch its own documentation points at, and
+that is the row worth comparing.
 
 ## The numbers
 
-Intel Core i7-13700H, Go 1.27, best of three. `bare` is the same record through a plain
-`JSONHandler` with no masking, so the delta column is what the masking costs.
+Intel Core i7-13700H, Go 1.27, `-benchtime 800ms -count 4`, best of four. Every table
+below comes from a single `go test -bench .` run, so the deltas are consistent across
+them. The numbers move a few percent between runs; the allocation counts do not.
 
-### Clean record — nothing matched
-
-| Library | Cost | Over bare | Allocations |
-| --- | --- | --- | --- |
-| `bare` | 537 ns | — | 0 |
-| `go-slog-redact` | 690 ns | +153 | 0 |
-| `cloak` | 761 ns | +224 | 0 |
-| `redactlog` | 802 ns | +265 | 0 |
-| `sensitive` | 986 ns | +449 | 2 |
-| `alesr/redact` | 1201 ns | +664 | 9 |
-| `masq+allowed-time` | 2266 ns | +1729 | 50 |
-| `masq` | 54619 ns | +54082 | 1719 |
-
-### Secret record — one key rule fired
+### Baseline, clean record — nothing matched
 
 | Library | Cost | Over bare | Allocations |
-| --- | --- | --- | --- |
-| `bare` | 548 ns | — | 0 |
-| `go-slog-redact` | 612 ns | +64 | 0 |
-| `redactlog` | 623 ns | +75 | 0 |
-| `cloak` | 660 ns | +112 | 0 |
-| `sensitive` | 962 ns | +414 | 2 |
-| `alesr/redact` | 1098 ns | +550 | 9 |
-| `masq+allowed-time` | 1942 ns | +1394 | 41 |
-| `masq` | 53510 ns | +52962 | 1710 |
+| `bare` | 561 ns | — | 0 |
+| `go-slog-redact` | 708 ns | +147 | 0 |
+| `redactlog` | 728 ns | +167 | 0 |
+| `cloak` | 761 ns | +200 | 0 |
+| `sensitive` | 1023 ns | +462 | 2 |
+| `alesr/redact` | 1223 ns | +662 | 9 |
+| `masq+allowed-time` | 2337 ns | +1776 | 50 |
+| `masq` | 55136 ns | +54575 | 1719 |
 
-
-## Three records from a real service
-
-The table above is a synthetic baseline: three attributes and a short message. These
-three are what a Go service actually writes, and each scenario says which libraries can
-be configured for it honestly. A library with no equivalent is reported as excluded
-rather than benchmarked with a configuration that quietly does nothing.
-
-All three write JSON to `io.Discard` with the built-in `time` attribute in place. `bare`
-is the same record through a plain `JSONHandler`, so the delta is what masking costs.
-
-### 1. `http_request` — the most common record in a service
-
-A request id, a method, a route, a status, a latency, a client address, a user agent
-long enough that a substring scan has real work to do, and one real email. Every library
-configured with the same two keys.
+### Baseline, secret record — one key rule fired
 
 | Library | Cost | Over bare | Allocations |
-| --- | --- | --- | --- |
-| `bare` | 931 ns | — | 1 |
-| `cloak` | 1560 ns | +628 | 4 |
-| `go-slog-redact` | 1380 ns | +448 | 4 |
-| `redactlog` | 1426 ns | +494 | 4 |
-| `sensitive` | 1672 ns | +740 | 3 |
-| `alesr/redact` | 1966 ns | +1034 | 15 |
-| `masq+allowed-time` | 3422 ns | +2490 | 73 |
-| `masq` | 43680 ns | +42748 | 1254 |
+| `bare` | 488 ns | — | 0 |
+| `go-slog-redact` | 634 ns | +146 | 0 |
+| `redactlog` | 638 ns | +150 | 0 |
+| `cloak` | 678 ns | +190 | 0 |
+| `sensitive` | 995 ns | +507 | 2 |
+| `alesr/redact` | 1107 ns | +619 | 9 |
+| `masq+allowed-time` | 2014 ns | +1526 | 41 |
+| `masq` | 55480 ns | +54992 | 1710 |
 
-Two keys match, so cloak's four allocations are two masked values plus the record
-rebuild. The gap to the two map-lookup libraries is the normalized key and the layered
-lookup behind it, over an eleven-attribute record.
+## Four records from a real service
+
+### 1. `http_request`
+
+Every library configured with the same two keys, `user_email` and `client_ip`.
+
+| Library | Cost | Over bare | Allocations |
+| `bare` | 945 ns | — | 1 |
+| `go-slog-redact` | 1371 ns | +426 | 4 |
+| `redactlog` | 1420 ns | +475 | 4 |
+| `cloak` | 1571 ns | +626 | 4 |
+| `sensitive` | 1659 ns | +714 | 3 |
+| `alesr/redact` | 1979 ns | +1034 | 15 |
+| `masq+allowed-time` | 3438 ns | +2493 | 73 |
+| `masq` | 43001 ns | +42056 | 1254 |
+
+Two keys match, and cloak allocates four exactly as the other two wrappers do. It is
+third, 200 ns behind a plain map hit across eight user attributes.
 
 ### 2. `payment_authorization` — content detection, no key rules anywhere
 
-A card number under a key nobody configured, beside numbers that only look like one. No
-library in this scenario gets a key rule, so the comparison is about finding a card and
-not about naming a field. Three participate:
+A card number under a key nobody configured. No library in this scenario gets a key rule,
+so the comparison is about finding a card and not about naming a field. Three participate;
+`go-slog-redact`, `sensitive` and `alesr/redact` have no content detection and are
+excluded rather than configured for something they cannot do.
 
 | Library | Cost | Over bare | Allocations |
-| --- | --- | --- | --- |
-| `bare` | 752 ns | — | 1 |
-| `cloak` | 1413 ns | +660 | 8 |
-| `redactlog` | 2304 ns | +1551 | 18 |
-| `masq` | 33108 ns | +32355 | 747 |
+| `bare` | 749 ns | — | 1 |
+| `redactlog` | 2318 ns | +1569 | 18 |
+| `cloak` | 1414 ns | +665 | 8 |
+| `masq` | 33035 ns | +32286 | 747 |
 
-`redactlog`'s `PANDetector` and cloak's `MaskPAN` are the same algorithm — locate thirteen
-to nineteen digits, reject with Luhn — so this is an equivalent test rather than two
-different jobs. Cloak is about 1.6 times cheaper and allocates less than half as much.
-`go-slog-redact`, `sensitive` and `alesr/redact` have no content detection and are
-excluded.
+`redactlog`'s `PANDetector` and cloak's `MaskPAN` are the same algorithm: locate thirteen
+to nineteen digits, then reject with Luhn. That makes this an equivalent test rather than
+two different jobs, and cloak is about 1.6 times cheaper while allocating less than half
+as much. masq is given the pattern matching it asks for, which is what a regex-based
+library does.
 
 **The false-positive result, which is the reason this record is here.** The same record
 also carries a sixteen-digit order id as the payment provider sends it, a thirteen-digit
@@ -127,88 +130,169 @@ millisecond timestamp, and an integer amount:
 
 masq masks the order id, which is not a card. The other two numbers survive for a reason
 that has nothing to do with validation: they are typed as integers, and a digit-count
-pattern never sees a non-string. That is worth stating plainly, because "the regex only
-got one of the three" is a weaker claim than "the regex got the one that is a string" —
-and a string is exactly how an order id, a transaction reference or an account number
-arrives.
+pattern never sees a non-string. That distinction is worth stating plainly, because "the
+regex only got one of the three" is a weaker claim than "the regex got the one that is a
+string" — and a string is exactly how an order id, a transaction reference or an account
+number arrives.
 
 ### 3. `background_job` — nothing sensitive, under the same production configuration
 
-A job id, a queue, an attempt count, a duration, a batch size, a region, a replica, an
-outcome. The keys from scenario one are still installed. This is the question a service
-owner actually has: what does the wrapper cost per line once it is in the binary.
+The keys from the first scenario are still installed.
 
 | Library | Cost | Over bare | Allocations |
-| --- | --- | --- | --- |
-| `bare` | 861 ns | — | 1 |
-| `cloak` | 1287 ns | +425 | **1** |
-| `go-slog-redact` | 1307 ns | +445 | 4 |
-| `redactlog` | 1316 ns | +454 | 4 |
-| `sensitive` | 1477 ns | +615 | 3 |
-| `alesr/redact` | 1853 ns | +991 | 15 |
-| `masq+allowed-time` | 3316 ns | +2454 | 75 |
-| `masq` | 44037 ns | +43175 | 1256 |
+| `bare` | 839 ns | — | 1 |
+| `go-slog-redact` | 1272 ns | +433 | 4 |
+| `redactlog` | 1300 ns | +461 | 4 |
+| `cloak` | 1267 ns | +428 | 1 |
+| `sensitive` | 1457 ns | +618 | 3 |
+| `alesr/redact` | 1830 ns | +991 | 15 |
+| `masq+allowed-time` | 3350 ns | +2511 | 75 |
+| `masq` | 44038 ns | +43199 | 1256 |
 
-This is the scenario where cloak's laziness pays. A nine-attribute record with nothing to
-match costs one allocation — the same as the bare handler — because the quiet path builds
-no copy and no fallback group. The other wrapper libraries allocate four times rebuilding
-a record they then discard.
+**On time this is a tie**, five nanoseconds apart, which is noise and should be read as
+a tie. The difference is in the allocation column: cloak costs one, exactly what the bare
+handler costs, because the quiet path builds no copy and no fallback group. The other
+wrappers allocate three to fifteen times that here, though on the four-attribute baseline
+they allocate nothing either — whatever threshold they cross, this is where it shows.
+
+### 4. `nested_struct` — the secrets are inside one struct
+
+```go
+"user", loggedUser{ID: 4711, Email: "jane.doe@example.com", Password: "correct-horse-battery"},
+```
+
+slog hands a handler one opaque `any` for this, so there is no group to walk into.
+Masking a field inside it takes reflecting through a struct, which is a different
+capability from naming a key. cloak gets `WithStructScan()` plus the same key rules;
+masq gets `WithFieldName`.
+
+| Library | Cost | Over bare | Allocations |
+| `bare` | 1006 ns | — | 1 |
+| `cloak` | 1754 ns | +748 | 5 |
+| `masq+allowed-time` | 3424 ns | +2418 | 63 |
+| `masq` | 44556 ns | +43550 | 1244 |
+
+**This is the one scenario where cloak wins outright, by 1.95 times against the fair
+masq configuration and 25 times against its default**, and it wins on allocations harder
+than on time: 5 against 63, a twelfth. Reflecting into a struct is the work, and masq pays for it by
+cloning what it finds.
+
+Three of the libraries cannot be configured for this record at all, so they are absent
+rather than given a configuration that quietly does nothing.
+`TestNestedStructReachesTheFieldOrDropsTheValue` reports what each one does when it is
+given its best attempt anyway, because a boundary is only informative if you show what
+the far side of it does:
+
+| Library | Configuration | Outcome |
+| --- | --- | --- |
+| `cloak` | `WithStructScan` + keys | **field** — two fields replaced, id kept |
+| `masq` | `WithFieldName("Email")`, `WithFieldName("Password")` | **field** — two fields replaced, id kept |
+| `redactlog` | `user.Email`, `user.Password` | **leak** — the struct is never entered |
+| `redactlog` | `user` | **value** — nothing leaks, and the id goes with it |
+| `go-slog-redact` | the key rule | **leak** |
+| `sensitive` | the key rule | **leak** |
+| `alesr/redact` | `AddRedactField("email")`, `("password")` | **leak** |
+
+The middle row is the interesting one. redactlog has a real path DSL — `user.Email`
+against a `slog.Group` masks correctly — but it descends into `slog.KindGroup` and never
+into a struct, and its trie is compiled case-sensitively, so no spelling of a path gets
+further than the top-level key. Given a struct its only move is to mask the whole value.
+That stops the leak and discards the user id along with it, which is why it is measured
+here rather than in the speed table: it is a different trade, not a slower version of the
+same one.
+
+The three `leak` rows are the ordinary consequence of not reflecting. The record they
+write is `slog.Any("user", user)` with a `Password` field in it, and a grep for the
+secret is the only test that notices.
 
 ## What the numbers say, and what they do not
 
-**On the realistic records cloak is first or third, and allocates least.** On
-`background_job` it is the fastest of the masking libraries *and* allocates once, where
-every other wrapper allocates three to fifteen times. The quiet path builds no copy and
-no fallback, so a record that was never going to leak costs nothing.
+**Cloak is third on every key-rule scenario, by 44 to 200 ns, and level on the quiet
+path.** That is the price of a lookup doing more than a `map[string]struct{}` contains:
+the key is normalized first, so `card_number`, `cardNumber` and `CARD-NUMBER` are one
+rule, and the same call has to consider regex keys, substring keys and the skip list. The
+two libraries ahead of it do a map hit and nothing else. Over a bare handler the whole
+wrapper costs 190 to 200 ns on the synthetic records, 428 ns on the quiet
 
-On `http_request` it is third, about 180 ns behind a plain map lookup over an
-eleven-attribute record. That gap is the price of the lookup doing more than a
-`map[string]struct{}` contains: the key is normalized first, so `card_number`,
-`cardNumber` and `CARD-NUMBER` are one rule, and the same call also has to consider
-regex keys, substring keys and the skip list. The two libraries ahead of it do a map hit
-and nothing else.
+eight-attribute one, and 626 ns where two keys actually match.
 
-**masq is the outlier, and the cause is the clock.** It deep-clones every value it is
-handed in order to decide whether to redact it, and a `ReplaceAttr` hook is handed the
-built-in `time` as well. A `time.Time` carries a `*time.Location`, so cloning it walks the
-whole zone table. The profiler puts 88% of the allocations in `masq.clone`:
-`reflect.unsafe_New` and `context.WithValue`, once per level of the walk.
+**Cloak allocates least, or ties for least, on every scenario — and that is the durable
+property.** Nothing at all on the synthetic records, tied with the two map-lookup
+libraries. Four on `http_request` where two values are replaced, again tied. And one on
+`background_job`, which is what the bare handler costs and no other library matches: the
+others sit at three, four or fifteen, because the quiet path builds no copy and no
+fallback to throw away.
 
-`masq+allowed-time` is the same configuration with `masq.WithAllowedType(reflect.TypeFor[time.Time]())`,
-which is masq's own escape hatch for types it should not clone. It brings 54619 ns down to
-2266 ns. It is still the slowest here, because cloning every value is the design and the
-time attribute is only the most expensive value to clone.
+**On content detection, where the comparison is equivalent, cloak is 1.6 times cheaper
+than the one library running the same algorithm**, and rejects the number that is not a
+card. Neither advantage is visible in the key-rule tables, which is the point: they are
+different jobs.
+
+**On the struct, cloak is 1.95 times cheaper than the fair masq configuration and
+allocates a twelfth as much**, because this is the scenario where the library
+that reaches inside has something to prove and the ones that do not are not in the table
+at all. The honest reading is narrower than it looks: cloak is not faster at reflecting
+than masq, it does far less around the reflection. masq clones whatever it finds to
+decide what to do with it, cloak reads the field.
+
+**masq is the outlier, and the cause is the clock.** It deep-clones every value to decide
+whether to redact it, and a `ReplaceAttr` hook is handed the built-in `time` as well. A
+`time.Time` carries a `*time.Location`, so cloning it walks the whole zone table. The
+profiler puts 88% of the allocations in `masq.clone`, through `reflect.unsafe_New` and
+`context.WithValue` once per level of the walk. `masq+allowed-time` is the same
+configuration with `masq.WithAllowedType(reflect.TypeFor[time.Time]())`, and it takes the
+clean record from 55136 ns to 2337 ns. It is still the slowest, because cloning every
+value is the design and the time attribute is only the most expensive value to clone. The
+profiler run behind that figure is the clean record, where `masq.clone` accounts for 88%
+of allocations.
 
 **alesr/redact re-scans the whole record once per configured field.** `AddRedactField`
-appends a pipeline stage, and each stage copies every attribute into a fresh record. Three
-fields is three full scans and three records, which is why it allocates 9 times where the
-others allocate none. It is a pipeline design, and the shape shows.
+appends a pipeline stage and each stage copies every attribute into a fresh record, so
+three fields is three scans and three records. That is where its fifteen allocations on
+the eight-attribute record come from, against nine on the four-attribute one.
 
 ## Why this is not a like-for-like benchmark
 
-Three differences matter more than the nanoseconds.
+Four differences matter more than the nanoseconds.
 
-**Only key-based masking is compared.** It is the one thing all six do. Cloak's content
-detectors — Luhn for card numbers, CPF and CNPJ check digits, IBAN MOD-97, the SSN range
-allocation — have no equivalent in most of these libraries, and neither does masking by Go
-type or by struct tag. Comparing those would be comparing two different jobs.
+**The scenarios do not all ask the same question.** The key-rule scenarios ask for masking
+by name, which every library here does. The payment scenario asks for a card number
+found in a value, which only three of them can do at all. The struct scenario asks for a
+field inside a value, which two of them can do. A row's presence in a table already says
+its library can do that job, which is why the tables are not the same width and why the
+ones that cannot are named rather than dropped. Nothing here compares masking by Go type,
+by struct tag, of the log message, or of values carried in a context: cloak has all four,
+most of the field has none, and there is no column to put them in.
 
-**The benchmark is key rules only, and with that configuration none of the libraries
-reaches inside a struct.** Not even cloak: walking composites is opt-in, so
-`slog.Any("user", u)` passes through untouched for every library here.
-`TestKeyOnlyConfigReachesInsideNothing` fails if that stops being true, so the table
-cannot quietly start comparing two different jobs.
+**With the key-only configuration none of the libraries reaches inside a struct.** Not
+even cloak: walking composites is opt-in, so `slog.Any("user", u)` passes through
+untouched for every library in those tables. `TestKeyOnlyConfigReachesInsideNothing`
+fails if that stops being true, so the tables cannot quietly start comparing two different
+jobs.
 
 That is a property of the configuration, not of the integration shape. Both cloak and
 masq can be told to walk — `WithStructScan`, or masq's field name or tag — and
 `TestBothHandlersCanReachInsideWhenConfigured` pins that. masq hooks `ReplaceAttr` and
 still walks, because it clones whatever it is handed. `sensitive` matches a key against a
 string value and has no way in at all. So "hook versus wrapper" is not the line that
-decides it; what each library does with the value it is given is.
+decides it; what each library does with the value it is given is. The struct scenario is
+where that distinction becomes a number instead of an argument.
 
-**Nothing here measures the message or the context.** Cloak's `WithMessageScan` and
-`WithContextAttrs` have no counterpart in the hook-based libraries at all.
+**A library that masks a whole value passes the same grep as one that masks a field.**
+`redactlog` on `RedactPaths: ["user"]` keeps the password out of the sink, which is what
+`TestNestedStructNobodyLeaksThePassword` checks, and it also throws away the user id.
+Both are "no leak"; only one is the job. The capability table in scenario 4 keeps the two
+apart for exactly this reason.
 
-The honest summary: on the narrow thing every library does, cloak is in the leading group
-and pays a small, explainable premium over the two that do least. What it does beyond that
-is not in the table because there is nothing to put in the other column.
+**The message is not in these tables either.** cloak has `WithMessageScan` for free text
+and the two `ReplaceAttr` libraries can reach the message by naming `msg`, which is
+undocumented behaviour of the handler rather than a rule that knows the message is prose.
+It is a smaller advantage than it looks, and it is not measured.
+
+The honest summary: on key rules cloak is a consistent third, 44 to 200 ns behind a
+plain map hit and never more than 626 ns over a bare handler, while allocating least or
+tied for least everywhere. On content detection, where the comparison is equivalent, it
+is 1.64 times cheaper and it rejects the number that is not a card. On a struct it is
+1.95 times cheaper than the only other library that can be configured for the record,
+and three of the remaining five cannot reach the field at all. What cloak does beyond that is
+not in the tables because there is nothing to put in the other column.
