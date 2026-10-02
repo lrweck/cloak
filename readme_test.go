@@ -339,3 +339,27 @@ func TestReadmeCompliancePresets(t *testing.T) {
 		t.Errorf("LGPD preset must keep country: %s", got)
 	}
 }
+
+// The README claims an anchor works, which a substring match cannot express.
+func TestReadmeKeyRegex(t *testing.T) {
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
+		cloak.WithKeyRegex(`_key$`, cloak.Redact),
+		cloak.WithKeyRegex(`^x-.*-token$`, cloak.Redact)))
+	logger.Info("m",
+		"api_key", "sk-123",
+		"x-auth-token", "t-1",
+		"key_id", "k-1",
+		"x-api-key", "k-2",
+	)
+
+	got := b.String()
+	if strings.Contains(got, "sk-123") || strings.Contains(got, "t-1") {
+		t.Fatalf("pattern did not match: %s", got)
+	}
+	for _, want := range []string{"k-1", "k-2"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q to survive: %s", want, got)
+		}
+	}
+}

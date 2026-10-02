@@ -32,7 +32,7 @@ library has no equivalent; a note means it can be done, but not first-class.
 | Hash for correlation, not exposure | — | — | — | — | ✅ | ❌ |
 | Redaction counters / stats | — | ✅ atomic | — | — | — | ❌ |
 | Regex over values | ✅ | — | ✅ | ✅ | — | via `WithValueFunc` |
-| **Regex over keys** | — | ✅ | — | — | — | ❌ substring only |
+| **Regex over keys** | — | ✅ | — | — | — | ✅ `WithKeyRegex` |
 | Path DSL with wildcards (`cards[*].pan`) | — | — | ✅ | — | — | ❌ normalized keys |
 | Predicate on the raw `slog.Value`, any kind | ✅ | ✅ | — | — | — | strings only |
 | Length-preserving / partial masks | ✅ `MaskWithSymbol` | ✅ `PartialMask` | ✅ | — | ✅ | ✅ `KeepFirst`/`KeepLast`/`KeepEnds` |
@@ -81,19 +81,22 @@ through.
    author meant to write.
 5. **Opt-in reflection.** Nothing touches `reflect` unless a composite option is on,
    asserted by a test that counts walk entries.
-6. **`ReplaceAttr` compatibility is deliberately absent.** Nearly every peer integrates
+6. **Key rules that reach every container.** A key rule now masks the value under a
+   matching map key too, so `map[string]string{"password": …}` is covered by the same
+   rule as an attribute. It was not, and the CPF case had been passing by luck because
+   the value detector happened to agree.
+7. **Key rules that fail loudly.** `WithKeyRegex` panics on an invalid pattern and on a
+   nil `*regexp.Regexp`, so a mistake is a startup failure rather than a rule that
+   silently matches nothing, or a nil dereference inside a log call.
+8. **`ReplaceAttr` compatibility is deliberately absent.** Nearly every peer integrates
    as `HandlerOptions.ReplaceAttr`. Cloak is a handler wrapper instead, because
    `ReplaceAttr` cannot scan the message or pull values from the context. Offering both
    would mean supporting the weaker half.
 
 ## Gaps still open, in the order I would take them
 
-0. **Regex over keys.** Found while verifying this matrix: `go-slog-redact` has
-   `WithPatterns("_key$", "^x-.*-token$")` and cloak only has `WithKeyContains`, a
-   substring match. That covers `x_api_key` but not `stripe_key$` or `^x-.*-token$`.
-   Cloak already imports `regexp` nowhere on the hot path, so this is a config-time
-   addition plus one map lookup. Cheap and clearly correct — arguably it should have
-   been in the first batch.
+0. ~~**Regex over keys.**~~ Closed. `WithKeyRegex`/`WithKeyRegexp`, with literal
+   patterns resolved ahead of time because Go's `regexp` is a backtracker.
 1. **`KeepHash()` — a stable pseudonym.** Masking destroys correlation: you cannot tell
    whether two log lines refer to the same account. A truncated hash keeps that without
    exposing anything. `sensitive` offers hashing; nobody else does. Small: one masker.

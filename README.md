@@ -90,6 +90,34 @@ cloak.WithKeyContains(cloak.Redact, "password")   // covers db.password, user_pa
 It is looser — `token` also matches `tokens_used` — so prefer `WithKey` unless the
 prefixes are known.
 
+For an anchor, which a substring match cannot express:
+
+```go
+cloak.WithKeyRegex(`_key$`, cloak.Redact)          // api_key, x_api_key
+cloak.WithKeyRegex(`^x-.*-token$`, cloak.Redact)   // x-auth-token
+```
+
+Patterns match the name **as written**, not the normalized key: `normalizeKey` strips
+the underscores and hyphens a pattern usually anchors on, so `_key$` would match
+nothing if it ran against the normalized form.
+
+`WithKeyRegex` compiles with `MustCompile`, so a typo panics at startup rather than
+becoming a rule that quietly matches nothing. Use `WithKeyRegexp` to handle the compile
+error yourself.
+
+Precedence is fixed rather than argument order: exact key, then pattern, then
+substring.
+
+Literal patterns are resolved when you build the handler, because Go's `regexp` is a
+backtracker and a case-insensitive alternation is expensive:
+
+```
+(?i)pass|secret|token   1080 ns/record   resolved to three substring tests
+(?i)(pass|secret|token) 1698 ns/record   the same pattern, unresolved
+```
+
+A bare literal is left alone, since `regexp` already handles those well.
+
 ### Value detectors
 
 A cheap structural pre-filter runs first, then the exact validation the format
@@ -223,6 +251,10 @@ Nesting composes: `[]map[string][]User`, `map[string]map[string]User` and
   merge. That is inherent to masking keys; nothing leaks, but an entry can be lost.
 - A struct map key is fine on `TextHandler`, but `slog`'s `JSONHandler` rejects it
   outright — a Go limitation, present with or without cloak.
+- A **key rule** masks the value stored under a matching key, exactly as it does for a
+  struct field. Masking the key instead would protect nothing —
+  `map[[REDACTED]:hunter2]` is the same leak wearing a hat — so the key name survives,
+  because it is the field name and not the secret.
 - **Unexported fields and fields tagged `slog:"-"` are dropped**, not copied.
   `encoding/json` ignores an unexported field, but `TextHandler` renders a struct with
   `%+v` and prints them, so copying one through would hand it to the sink:
@@ -260,6 +292,8 @@ never evaluates `LogValue()` again.
 | --- | --- |
 | `WithKey(mask, keys...)` | Mask whole-key matches |
 | `WithKeyContains(mask, keys...)` | Mask substring matches |
+| `WithKeyRegex(pattern, mask)` | Mask keys matching a pattern |
+| `WithKeyRegexp(re, mask)` | Same, for a pattern you compiled |
 | `WithType[T](maskers...)` | Mask values of Go type `T` |
 | `WithTag(key, value, mask)` | Mask struct fields carrying a tag |
 | `WithContain(secrets...)` | Mask any value containing a known secret |
