@@ -336,13 +336,32 @@ func WithContextAttrs(pulls ...func(context.Context) []slog.Attr) Options {
 	return option(func(c *config) { c.ctxPulls = append(c.ctxPulls, pulls...) })
 }
 
+// normalizeKey folds case and drops the separators, so card_number, cardNumber,
+// CARD-NUMBER and "Card Number" are one key.
+//
+// Most keys in a real log are already normalized, and a builder allocated for every
+// attribute on every record is the largest single cost on the path where nothing
+// matched. The fast path scans first and returns the input untouched, allocating
+// nothing. An empty key has nothing to fold and returns as it came.
 func normalizeKey(s string) string {
+	plain := true
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '_' || c == '-' || c == ' ' || c == '\t' ||
+			(c >= 'A' && c <= 'Z') {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return s
+	}
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch c {
-		case '_', '-', ' ', '	':
+		case '_', '-', ' ', '\t':
 			continue
 		}
 		if c >= 'A' && c <= 'Z' {
@@ -795,7 +814,17 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	if h.next == nil {
 		return nil
 	}
+	// A fixed backing array, so a record that matches nothing never grows a heap
+	// slice on the way to being discarded. 16 covers the overwhelming majority of
+	// records; a wider one falls back to append and allocates, as it must.
+	var stack [16]slog.Attr
 	attrs := h.contextAttrs(ctx)
+	if len(attrs) > 0 {
+		merged := make([]slog.Attr, 0, len(attrs)+16)
+		attrs = append(merged, attrs...)
+	} else {
+		attrs = stack[:0]
+	}
 	changed := len(attrs) > 0
 	r.Attrs(func(a slog.Attr) bool {
 		na, c := h.attr(a)
