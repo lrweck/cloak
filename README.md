@@ -560,10 +560,10 @@ The short version, each record measured against itself logged straight to `slog`
 
 | | bare slog | with cloak | delta |
 | --- | --- | --- | --- |
-| 4 attributes, nothing to match | 448 ns, 0 allocs | 569 ns, 0 allocs | **+121 ns** |
+| 4 attributes, nothing to match | 445 ns, 0 allocs | 556 ns, 0 allocs | **+111 ns** |
 | key lookup in isolation | — | 9 ns, 0 allocs | — |
-| 9 detectors over clean sentences | — | 176 ns, 0 allocs | — |
-| `slog.Any` with a struct | 729 ns, 1 alloc | 1465 ns, 6 allocs | +736 ns |
+| 9 detectors over clean sentences | — | 175 ns, 0 allocs | — |
+| `slog.Any` with a struct | 746 ns, 1 alloc | 1449 ns, 6 allocs | +703 ns |
 
 On that row cloak is **1.95 times cheaper than the one other library that can be
 configured for it, and allocates a twelfth as much** — 1754 ns and 5 allocations against
@@ -571,7 +571,7 @@ masq's 3424 ns and 63.
 
 Three things to take from it:
 
-- **The quiet path is cheap and allocation-free.** About 120 ns over bare for a record
+- **The quiet path is cheap and allocation-free.** About 111 ns over bare for a record
   where nothing matched, and nothing allocated. Key lookup is a single map hit, and a
   lookup that misses never materializes the folded key, so even `snake_case` names cost
   nothing. A walked struct or slice where nothing matched costs nothing either, at any
@@ -580,7 +580,7 @@ Three things to take from it:
   costs is the replacement itself — a new string is two allocations, which is the floor,
   and the detector and message rows sit exactly on it.
 - **Reflection costs several times more** and is opt-in for that reason. The
-  0.7–1.4 µs of the walk rows is the price of rebuilding the container: boxing each
+  0.7–1.3 µs of the walk rows is the price of rebuilding the container: boxing each
   element out of reflection, the copy, and the masked strings.
 
 ## Gotchas

@@ -39,18 +39,18 @@ nanoseconds.
 
 | Scenario | bare slog | with cloak | delta | what it exercises |
 | --- | --- | --- | --- | --- |
-| `no_pii_text` | 448 ns, 0 allocs | 569 ns, 0 allocs | **+121 ns** | no PII in the text |
-| `key_only_no_detectors` | 458 ns, 0 allocs | 588 ns, 0 allocs | **+130 ns** | 102 key rules, no format scan |
-| `key_rule_fires` | 382 ns, 0 allocs | 455 ns, 0 allocs | **+73 ns** | one key rule redacting |
-| `detector_fires` | 390 ns, 0 allocs | 792 ns, 2 allocs | +402 ns | the email detector matching |
-| `preset_mixed_record` | 612 ns, 0 allocs | 897 ns, 0 allocs | +285 ns | keys and detectors together |
-| `preset_wide_record` | 1484 ns, 1 allocs | 2693 ns, 2 allocs | +1209 ns | 20 attributes, mostly unmatched |
-| `groups_nested` | 576 ns, 0 allocs | 1086 ns, 4 allocs | +510 ns | two nested groups |
-| `struct_walk` | 729 ns, 1 allocs | 1465 ns, 6 allocs | +736 ns | `slog.Any` with a struct |
-| `map_walk` | 1291 ns, 10 allocs | 2489 ns, 23 allocs | +1198 ns | `slog.Any` with a map |
-| `slice_walk` | 660 ns, 1 allocs | 2010 ns, 17 allocs | +1350 ns | `slog.Any` with a slice |
-| `message_scan` | 415 ns, 0 allocs | 884 ns, 2 allocs | +470 ns | an email inside the message |
-| `context_attrs` | 386 ns, 0 allocs | 1654 ns, 8 allocs | +1268 ns | a masked pull on every record |
+| `no_pii_text` | 445 ns, 0 allocs | 556 ns, 0 allocs | **+111 ns** | no PII in the text |
+| `key_rule_fires` | 378 ns, 0 allocs | 452 ns, 0 allocs | **+73 ns** | one key rule redacting |
+| `detector_fires` | 383 ns, 0 allocs | 761 ns, 2 allocs | +378 ns | the email detector matching |
+| `preset_mixed_record` | 614 ns, 0 allocs | 898 ns, 0 allocs | +283 ns | keys and detectors together |
+| `preset_wide_record` | 1518 ns, 1 allocs | 2636 ns, 2 allocs | +1118 ns | 20 attributes, mostly unmatched |
+| `groups_nested` | 566 ns, 0 allocs | 1072 ns, 4 allocs | +506 ns | two nested groups |
+| `struct_walk` | 746 ns, 1 allocs | 1449 ns, 6 allocs | +703 ns | `slog.Any` with a struct |
+| `map_walk` | 1265 ns, 10 allocs | 2418 ns, 23 allocs | +1153 ns | `slog.Any` with a map |
+| `slice_walk` | 640 ns, 1 allocs | 1950 ns, 17 allocs | +1310 ns | `slog.Any` with a slice |
+| `message_scan` | 404 ns, 0 allocs | 874 ns, 2 allocs | +470 ns | an email inside the message |
+| `context_attrs` | 388 ns, 0 allocs | 1589 ns, 8 allocs | +1201 ns | a masked pull on every record |
+| `key_only_no_detectors` | 452 ns, 0 allocs | 564 ns, 0 allocs | **+113 ns** | 102 key rules, no format scan |
 
 ### What the numbers say
 
