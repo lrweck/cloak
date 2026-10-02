@@ -11,8 +11,8 @@ import (
 	"github.com/lrweck/cloak"
 )
 
-// A named type is masked wherever it appears, including under a key nobody added to
-// a preset. slog stores it as KindAny, so no string detector would ever see it.
+// Password is a named type, masked wherever it appears, including under a key nobody
+// added to a preset. slog stores it as KindAny, so no string detector would see it.
 type Password string
 
 type Account struct {
