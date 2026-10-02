@@ -113,7 +113,7 @@ func FuzzKeyRegexRuleNoPanic(f *testing.F) {
 		WithKeysContaining(Redact, "pass").apply(c)
 		WithKeys(Redact, "password").apply(c)
 
-		m, ok := c.maskerForKey(key, normalizeKey(key))
+		m, ok := c.maskerForKey(key)
 		if !ok {
 			return
 		}

@@ -156,6 +156,11 @@ type config struct {
 	containsIdx map[string]int
 	tagIdx      map[tagID]int
 	regexIdx    map[string]int
+	// keyHash is the foldHash of every exact name the config can match: registered
+	// keys and skip entries, which are all stored normalized. A name needing a fold
+	// whose hash is absent cannot match either, so the miss path never materializes
+	// the folded form. Nil before finalize runs, which only internal tests observe.
+	keyHash map[uint64]struct{}
 	// builtins tracks which of the library's own detectors are installed, so a
 	// preset composed twice does not scan twice.
 	builtins uint32
@@ -361,17 +366,46 @@ func WithContextAttrs(pulls ...func(context.Context) []slog.Attr) Options {
 // attribute on every record is the largest single cost on the path where nothing
 // matched. The fast path scans first and returns the input untouched, allocating
 // nothing. An empty key has nothing to fold and returns as it came.
-func normalizeKey(s string) string {
-	plain := true
+// isPlain reports whether s needs no folding: no separators, no uppercase. It is
+// the scan normalizeKey would do anyway, exposed so the key lookup can decide
+// whether folding is needed before paying for it.
+func isPlain(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if c == '_' || c == '-' || c == ' ' || c == '\t' ||
 			(c >= 'A' && c <= 'Z') {
-			plain = false
-			break
+			return false
 		}
 	}
-	if plain {
+	return true
+}
+
+// foldHash is FNV-1a over the folded form, computed without materializing it. It is
+// only a pre-filter for the exact-key lookup: a hit is always verified against the
+// real key, so a collision costs one wasted fold, never a wrong rule.
+func foldHash(s string) uint64 {
+	const (
+		offset = 14695981039346656037
+		prime  = 1099511628211
+	)
+	h := uint64(offset)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '_', '-', ' ', '\t':
+			continue
+		}
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		h ^= uint64(c)
+		h *= prime
+	}
+	return h
+}
+
+func normalizeKey(s string) string {
+	if isPlain(s) {
 		return s
 	}
 	var b strings.Builder
@@ -913,8 +947,7 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 
 func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 	v := a.Value.Resolve()
-	key := normalizeKey(a.Key)
-	if m, ok := h.cfg.maskerForKey(a.Key, key); ok {
+	if m, ok := h.cfg.maskerForKey(a.Key); ok {
 		return slog.Attr{Key: a.Key, Value: m(v)}, true
 	}
 	if m, ok := h.cfg.maskerForType(v); ok {
@@ -945,7 +978,7 @@ func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 		// Everything that is not a group: a value rule may claim it whatever its
 		// kind, which is the point of the rule. A group is excluded because
 		// replacing one would discard the structure rather than mask it.
-		if _, skip := h.cfg.skip[key]; skip {
+		if h.cfg.skipKey(a.Key) {
 			break
 		}
 		if nv, ok := h.valueRule(v); ok {
@@ -954,7 +987,7 @@ func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 	}
 	switch v.Kind() {
 	case slog.KindString:
-		if _, ok := h.cfg.skip[key]; ok {
+		if h.cfg.skipKey(a.Key) {
 			return a, false
 		}
 		if s, changed := h.maskString(v.String()); changed {
@@ -969,7 +1002,7 @@ func (h *Handler) attr(a slog.Attr) (slog.Attr, bool) {
 		if !h.cfg.scans(v.Any()) {
 			break
 		}
-		if _, ok := h.cfg.skip[key]; ok {
+		if h.cfg.skipKey(a.Key) {
 			return a, false
 		}
 		if out, changed := h.walk(v.Any(), 0); changed {

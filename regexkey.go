@@ -209,19 +209,49 @@ func (c *config) finalize() {
 	for i := range c.regexKeys {
 		c.regexKeys[i].masker = fill(c.regexKeys[i].masker)
 	}
+	c.keyHash = make(map[uint64]struct{}, len(c.keys)+len(c.skip))
+	for k := range c.keys {
+		c.keyHash[foldHash(k)] = struct{}{}
+	}
+	for k := range c.skip {
+		c.keyHash[foldHash(k)] = struct{}{}
+	}
 }
 
-// maskerForKey returns the rule covering a key, given the name as written and its
-// normalized form.
+// maskerForKey returns the rule covering a key, given the name as written. Folding
+// is lazy: an already-normalized name looks up directly, and anything else goes
+// through the hash gate when the config holds no pattern rules, so a miss never
+// materializes the folded form.
 //
 // The order is fixed rather than the order the options were given: an exact key is the
 // most specific statement of intent, a pattern is deliberate, and a substring is the
 // loosest of the three. Without a fixed order the same configuration would behave
 // differently depending on argument order.
-func (c *config) maskerForKey(raw, normalized string) (Masker, bool) {
-	if m, ok := c.keys[normalized]; ok {
+func (c *config) maskerForKey(raw string) (Masker, bool) {
+	if isPlain(raw) {
+		if m, ok := c.keys[raw]; ok {
+			return m, true
+		}
+		return c.maskerForPattern(raw, raw)
+	}
+	// A name needing a fold cannot equal a registered key as written, since those
+	// are stored normalized. With no pattern rules the hash decides: absent means
+	// no exact key can match, and the folded form is never built.
+	if len(c.regexKeys) == 0 && len(c.contains) == 0 && c.keyHash != nil {
+		if _, ok := c.keyHash[foldHash(raw)]; !ok {
+			return nil, false
+		}
+	}
+	folded := normalizeKey(raw)
+	if m, ok := c.keys[folded]; ok {
 		return m, true
 	}
+	return c.maskerForPattern(raw, folded)
+}
+
+// maskerForPattern checks the pattern rules: regexKeys against the name as written,
+// contains against the normalized form.
+func (c *config) maskerForPattern(raw, normalized string) (Masker, bool) {
 	for i := range c.regexKeys {
 		if c.regexKeys[i].matches(raw, normalized) {
 			return c.regexKeys[i].masker, true
@@ -233,4 +263,23 @@ func (c *config) maskerForKey(raw, normalized string) (Masker, bool) {
 		}
 	}
 	return nil, false
+}
+
+// skipKey reports whether a key is on the skip list. Like maskerForKey it avoids the
+// fold on the miss path: a name needing one whose hash is absent cannot name a skip
+// entry, since those are stored normalized too.
+func (c *config) skipKey(raw string) bool {
+	if _, ok := c.skip[raw]; ok {
+		return true
+	}
+	if isPlain(raw) || len(c.skip) == 0 {
+		return false
+	}
+	if c.keyHash != nil {
+		if _, ok := c.keyHash[foldHash(raw)]; !ok {
+			return false
+		}
+	}
+	_, ok := c.skip[normalizeKey(raw)]
+	return ok
 }

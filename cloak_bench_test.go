@@ -83,7 +83,7 @@ func BenchmarkKeyLookup(b *testing.B) {
 	WithDefaultPIIKeys().apply(c)
 	key := normalizeKey("email")
 	for b.Loop() {
-		if _, ok := c.maskerForKey(key, key); !ok {
+		if _, ok := c.maskerForKey(key); !ok {
 			b.Fatal("expected a rule")
 		}
 	}
