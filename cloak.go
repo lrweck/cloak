@@ -880,15 +880,10 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	}
 	// A fixed backing array, so a record that matches nothing never grows a heap
 	// slice on the way to being discarded. 16 covers the overwhelming majority of
-	// records; a wider one falls back to append and allocates, as it must.
+	// records; a wider one falls back to append and allocates, as it must. Context
+	// attributes land in the same array, so there is one buffer, not two.
 	var stack [16]slog.Attr
-	attrs := h.contextAttrs(ctx)
-	if len(attrs) > 0 {
-		merged := make([]slog.Attr, 0, len(attrs)+16)
-		attrs = append(merged, attrs...)
-	} else {
-		attrs = stack[:0]
-	}
+	attrs := h.contextAttrs(ctx, stack[:0])
 	changed := len(attrs) > 0
 	r.Attrs(func(a slog.Attr) bool {
 		na, c := h.attr(a)
@@ -911,13 +906,14 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	return h.next.Handle(ctx, r)
 }
 
-// contextAttrs masks whatever the registered pulls produce and returns them as
-// attributes.
-func (h *Handler) contextAttrs(ctx context.Context) []slog.Attr {
+// contextAttrs masks whatever the registered pulls produce and appends them to buf,
+// returning the extended slice. The caller passes its stack buffer, so a record whose
+// attributes fit the array never touches the heap on the way to being discarded.
+func (h *Handler) contextAttrs(ctx context.Context, buf []slog.Attr) []slog.Attr {
 	if len(h.cfg.ctxPulls) == 0 {
-		return nil
+		return buf
 	}
-	var attrs []slog.Attr
+	attrs := buf
 	for _, pull := range h.cfg.ctxPulls {
 		for _, a := range pull(ctx) {
 			na, _ := h.attr(a)

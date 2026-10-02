@@ -128,12 +128,19 @@ func (h *Handler) walkValue(v slog.Value, depth int) (any, bool) {
 	switch v.Kind() {
 	case slog.KindGroup:
 		src := v.Group()
-		dst := make([]slog.Attr, len(src))
+		// Prefix copy, as in attr: an untouched group keeps its backing array,
+		// so walking one that matches nothing allocates nothing.
+		var dst []slog.Attr
 		changed := false
 		for i, ga := range src {
 			out, c := h.walkField(ga.Key, "", ga.Value, depth+1)
-			dst[i] = slog.Attr{Key: ga.Key, Value: out}
-			changed = changed || c
+			if c && !changed {
+				dst = append(make([]slog.Attr, 0, len(src)), src[:i]...)
+				changed = true
+			}
+			if changed {
+				dst = append(dst, slog.Attr{Key: ga.Key, Value: out})
+			}
 		}
 		if !changed {
 			return v, false
@@ -364,8 +371,10 @@ func (h *Handler) walkSlice(v reflect.Value, depth int) (any, bool) {
 	// needs one.
 	for i := range v.Len() {
 		elem := v.Index(i)
-		out, c := h.walk(elem.Interface(), depth+1)
-		wide[i] = loose(out, c, elem.Interface())
+		// Boxed once: wide reuses the same any walk consumed.
+		ei := elem.Interface()
+		out, c := h.walk(ei, depth+1)
+		wide[i] = loose(out, c, ei)
 
 		if !c {
 			dst.Index(i).Set(elem)

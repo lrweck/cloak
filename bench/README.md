@@ -9,43 +9,53 @@ go test -bench Scenario -benchmem -benchtime 2s   # steadier numbers
 
 A single number for "what cloak costs" is meaningless: the work depends on whether a
 rule fired, how wide the record is, and whether reflection is on. So each record is
-logged twice — once straight to `slog`, once through cloak — and the interesting number
-is the difference between the pair.
+logged twice with the identical record — once straight to `slog`, once through cloak —
+and the interesting number is the difference between the pair.
+
+Two things the pairing keeps honest. The sink's own cost depends on the shape:
+marshaling a map allocates inside `encoding/json` whether cloak is in the path or not,
+and a bare handler logging a different record would attribute that cost to the masking.
+And the quiet path — a record where nothing matches — is the case worth optimizing,
+because most records in a real log are quiet.
 
 The sink is `io.Discard` behind a `JSONHandler`, so what is measured is cloak plus the
 handler chain, not the cost of formatting or of writing bytes.
 
 ## Scenarios
 
-Intel Core i7-13700H, Go 1.27, `linux/amd64`.
+Intel Core i7-13700H, Go 1.27, `linux/amd64`. Each row is the same record through a
+bare handler and through cloak; the delta is the masking.
 
-| Scenario | cloak | bare slog | delta | allocs | what it exercises |
-| --- | --- | --- | --- | --- | --- |
-| `no_pii_text` | 661 ns | 530 ns | **+131 ns** | 1 | nothing matched |
-| `key_only_no_detectors` | 637 ns | 530 ns | +107 ns | 1 | 102 key rules, no format scan |
-| `key_rule_fires` | 541 ns | — | — | 0 | one key rule redacting |
-| `detector_fires` | 911 ns | — | — | 3 | the email detector matching |
-| `preset_mixed_record` | 935 ns | — | — | 1 | keys and detectors together |
-| `preset_wide_record` | 3132 ns | — | — | 22 | 20 attributes, mostly unmatched |
-| `groups_nested` | 1121 ns | — | — | 4 | two nested groups |
-| `struct_walk` | 1804 ns | — | — | 17 | `slog.Any` with a struct |
-| `map_walk` | 2892 ns | — | — | 28 | `slog.Any` with a map |
-| `slice_walk` | 2129 ns | — | — | 22 | `slog.Any` with a slice |
-| `message_scan` | 952 ns | — | — | 2 | an email inside the message |
-| `context_attrs` | 2266 ns | — | — | 21 | a masked pull on every record |
+| Scenario | bare slog | with cloak | delta | what it exercises |
+| --- | --- | --- | --- | --- |
+| `no_pii_text` | 472 ns, 0 allocs | 599 ns, 0 allocs | **+127 ns** | nothing matched |
+| `key_only_no_detectors` | 458 ns, 0 allocs | 675 ns, 0 allocs | +217 ns | 102 key rules, no format scan |
+| `key_rule_fires` | 402 ns, 0 allocs | 542 ns, 0 allocs | +140 ns | one key rule redacting |
+| `detector_fires` | 461 ns, 0 allocs | 844 ns, 2 allocs | +383 ns | the email detector matching |
+| `preset_mixed_record` | 630 ns, 0 allocs | 914 ns, 0 allocs | +284 ns | keys and detectors together |
+| `preset_wide_record` | 1534 ns, 1 alloc | 2866 ns, 2 allocs | +1332 ns | 20 attributes, mostly unmatched |
+| `groups_nested` | 704 ns, 0 allocs | 1323 ns, 4 allocs | +619 ns | two nested groups |
+| `struct_walk` | 751 ns, 1 alloc | 1857 ns, 14 allocs | +1106 ns | `slog.Any` with a struct |
+| `map_walk` | 1289 ns, 10 allocs | 3040 ns, 28 allocs | +1751 ns | `slog.Any` with a map |
+| `slice_walk` | 696 ns, 1 alloc | 2209 ns, 19 allocs | +1513 ns | `slog.Any` with a slice |
+| `message_scan` | 477 ns, 0 allocs | 896 ns, 2 allocs | +419 ns | an email inside the message |
+| `context_attrs` | 395 ns, 0 allocs | 2081 ns, 17 allocs | +1686 ns | a masked pull on every record |
 
 ### What the numbers say
 
-**The quiet path is cheap.** A record with nothing to mask costs about 130 ns and one
-allocation over a bare `slog` handler — roughly 30 ns per attribute. Most of the cost
-is `normalizeKey` and the map lookup that follows it.
+**The quiet path is cheap and allocation-free.** A record with nothing to mask costs
+about 130 ns over a bare `slog` handler and allocates nothing. Most of the delta is
+`normalizeKey` and the map lookup that follows it — and since the lookup that misses
+never materializes the folded form, even `snake_case` keys cost no allocation.
 
-**Key lookup alone is 7.5 ns.** `BenchmarkKeyLookup` in `cloak_bench_test.go` measures
-the lookup in isolation: one map hit, no allocation.
+**Key lookup alone is 11 ns.** `BenchmarkKeyLookup` measures the lookup in isolation:
+one map hit, no allocation.
 
 **A rule that fires costs about the same as one that does not.** `key_rule_fires` is
-faster than `no_pii_text` because the record has one attribute instead of four. Masking
-a string is not the expensive part; finding the string was.
+only 140 ns over bare. Masking a string is not the expensive part; finding the value
+was. What a match does cost is the replacement itself: a new string is two allocations
+(the bytes and the boxing), which is the floor — `detector_fires` and `message_scan`
+both sit exactly on it at 2 allocs.
 
 **The detectors are gated twice.** Each one runs a structural pre-filter first and only
 pays for its exact validation when the shape is plausible:
@@ -53,23 +63,26 @@ pays for its exact validation when the shape is plausible:
 | Detector | Typical text that does not match |
 | --- | --- |
 | `MaskUUID` | 11 ns |
-| `MaskEmail` | 28 ns |
-| `MaskIPv4` | 29 ns |
-| `MaskCPF` | 97 ns |
-| `MaskCNPJ` | 106 ns |
-| `MaskSSN` | 107 ns |
-| `MaskPAN` | 107 ns |
-| `MaskIBAN` | 172 ns |
-| `MaskPhone` | 158 ns |
+| `MaskEmail` | 29 ns |
+| `MaskIPv4` | 28 ns |
+| `MaskCPF` | 105 ns |
+| `MaskCNPJ` | 93 ns |
+| `MaskSSN` | 95 ns |
+| `MaskPAN` | 106 ns |
+| `MaskIBAN` | 170 ns |
+| `MaskPhone` | 155 ns |
 
-Nine detectors over a sentence that holds none of them costs about 210 ns, and
+Nine detectors over six sentences that hold none of them costs about 180 ns, and
 `BenchmarkDetectorsComposed` shows that running them twice is no slower than once —
 the pre-filter is what makes the composition affordable.
 
 **Reflection is opt-in and clearly marked.** `WithStructScan`, `WithMapScan` and
-`WithSliceScan` cost 1.8–2.9 µs, an order of magnitude above the key path. Without one
-of them, `reflect` is never called on the logging path at all
-(`TestReadmeCompositeOptionsAreOptIn` and `walkCalls` pin that).
+`WithSliceScan` cost 1.1–1.8 µs over bare, an order of magnitude above the key path.
+The price is the copy: boxing each element out of reflection, the rebuilt container,
+and the masked strings themselves. Without one of them, `reflect` is never called on
+the logging path at all (`TestReadmeCompositeOptionsAreOptIn` and `walkCalls` pin
+that). Note the bare column for `map_walk`: 10 of the 28 allocations belong to the
+JSON sink marshaling the map, not to the masking.
 
 ## Scaling with record width
 
@@ -78,19 +91,20 @@ attribute.
 
 | Attributes | bare slog | key rules | delta | per attribute |
 | --- | --- | --- | --- | --- |
-| 1 | 395 ns | 509 ns | +114 ns | 114 ns |
-| 5 | 642 ns | 1036 ns | +394 ns | 79 ns |
-| 10 | 971 ns | 1712 ns | +741 ns | 74 ns |
-| 20 | 1529 ns | 3132 ns | +1603 ns | 80 ns |
-| 50 | 3435 ns | 7271 ns | +3836 ns | 77 ns |
+| 1 | 438 ns | 526 ns | +88 ns | 88 ns |
+| 5 | 697 ns | 1009 ns | +312 ns | 62 ns |
+| 10 | 951 ns | 1462 ns | +511 ns | 51 ns |
+| 20 | 1504 ns | 2897 ns | +1393 ns | 70 ns |
+| 50 | 3394 ns | 6810 ns | +3416 ns | 68 ns |
 
-The cost is linear in the number of attributes and settles at about 80 ns each. There
-is no cliff: records wider than the 16-slot stack buffer fall back to `append` and
-allocate, which is slower but not different in kind, and `TestHandleWideRecordKeepsEveryAttribute`
-covers it.
+The cost is linear in the number of attributes at about 50–70 ns each, with zero
+allocations up to ten attributes. There is no cliff: records wider than the 16-slot
+stack buffer fall back to `append` and allocate, which is slower but not different in
+kind, and `TestHandleWideRecordKeepsEveryAttribute` covers it.
 
 ## Reproducing
 
 Numbers come from this machine and will differ on yours. What should reproduce is the
-*shape*: the quiet path near the bare handler, reflection an order of magnitude above
-the key path, and no allocation when nothing matched.
+*shape*: the quiet path near the bare handler with zero allocations, a matched string
+at exactly two, reflection an order of magnitude above the key path, and no allocation
+when nothing matched.

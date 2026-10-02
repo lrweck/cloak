@@ -137,23 +137,28 @@ func scenarioRecords() []benchRecord {
 
 type benchCtxKey struct{}
 
-// BenchmarkScenario measures each record twice: once straight to slog, once through
-// cloak with that scenario's options. The gap is what cloak costs for that shape.
+// BenchmarkScenario measures each record twice with the identical record: once
+// straight to slog, once through cloak with that scenario's options. The gap is
+// what cloak costs for that shape. A single shared bare record would lie here,
+// because the sink's own cost depends on the shape: marshaling a map allocates
+// in encoding/json whether cloak is in the path or not, and that cost belongs to
+// the sink, not to the masking.
 func BenchmarkScenario(b *testing.B) {
-	recs := scenarioRecords()
-
-	b.Run("bare_slog", func(b *testing.B) {
-		logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-		msg := recs[0].args[0].(string)
-		rest := recs[0].args[1:]
-		b.ReportAllocs()
-		for b.Loop() {
-			logger.Info(msg, rest...)
-		}
-	})
-
-	for _, rec := range recs {
-		b.Run(rec.name, func(b *testing.B) {
+	for _, rec := range scenarioRecords() {
+		b.Run("bare/"+rec.name, func(b *testing.B) {
+			logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+			msg := rec.args[0].(string)
+			rest := rec.args[1:]
+			b.ReportAllocs()
+			for b.Loop() {
+				if rec.ctx != nil {
+					logger.InfoContext(rec.ctx, msg, rest...)
+				} else {
+					logger.Info(msg, rest...)
+				}
+			}
+		})
+		b.Run("cloak/"+rec.name, func(b *testing.B) {
 			logger := slog.New(cloak.New(slog.NewJSONHandler(io.Discard, nil), rec.opts...))
 			msg := rec.args[0].(string)
 			rest := rec.args[1:]
