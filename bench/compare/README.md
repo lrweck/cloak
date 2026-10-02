@@ -148,8 +148,8 @@ four or fifteen.
 
 ### 4. `nested_struct` — the secrets are inside one struct
 
-```go
-"user", loggedUser{ID: 4711, Email: "jane.doe@example.com", Password: "correct-horse-battery"},
+```
+"user", loggedUser{ID: 4711, Email: "jane.doe@example.com", Password: "correct-horse-battery"}
 ```
 
 slog hands a handler one opaque `any` here, so there is no group to walk into. Masking a

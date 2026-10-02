@@ -8,7 +8,7 @@ reaches your log sink.
 
 ```go
 logger := slog.New(cloak.New(slog.NewJSONHandler(os.Stdout, nil),
-    cloak.WithDefaultPII(),))
+    cloak.WithDefaultPII()))
 ```
 
 Cloak wraps the handler you already use. Nothing else in your code changes.
@@ -44,14 +44,16 @@ Go 1.27 or newer. No dependencies.
 ```go
 package main
 
-import ("log/slog"
+import (
+    "log/slog"
     "os"
 
-    "github.com/lrweck/cloak")
+    "github.com/lrweck/cloak"
+)
 
 func main() {
     slog.SetDefault(slog.New(cloak.New(slog.NewJSONHandler(os.Stdout, nil),
-        cloak.WithDefaultPII(),)))
+        cloak.WithDefaultPII())))
 
     slog.Info("payment", "email", "john@example.com", "amount", 1299)
 }
@@ -84,7 +86,7 @@ That order is fixed and does not depend on the order you pass options. It runs f
 explicit to most inferred: a key rule names the field, a detector only guesses from the
 shape of a string.
 
-Three consequences fall out of it:
+Four consequences fall out of it:
 
 - **A key rule beats a detector.** `WithKeys(KeepLast(4), "card_number")` keeps the last
   four digits instead of the full redaction the preset would apply.
@@ -300,7 +302,8 @@ Groups are walked recursively, and every attribute is preserved, matched or not:
 slog.Group("user",
     slog.Int("id", 7),                        // kept
     slog.String("email", "john@example.com"), // masked
-    slog.String("name", "Jane"),              // kept)
+    slog.String("name", "Jane"),              // kept,
+)
 // user.id=7 user.email=[REDACTED] user.name=Jane
 ```
 
@@ -508,6 +511,10 @@ function that returns one. Later options override earlier ones, as everywhere el
 | `JoinOptions(opts...)` | Combine options into one value |
 | `New(next, opts...)` | Wrap a handler |
 | `New(nil, ...)` | Discard everything; useful in tests |
+| `NewDefaultPII(next, opts...)` | `WithDefaultPII()` as a constructor |
+| `NewPCI(next, opts...)` | `WithPCI()` as a constructor |
+| `NewGDPR(next, opts...)` | `WithGDPR()` as a constructor |
+| `NewLGPD(next, opts...)` | `WithLGPD()` as a constructor |
 
 The maskers decide what a matched rule produces:
 
@@ -519,6 +526,20 @@ The maskers decide what a matched rule produces:
 | `KeepFirst(4)` | `4111************` |
 | `KeepEnds(4, 4)` | `4111********1111` |
 | `MaskMiddle(4, 4)` | alias of `KeepEnds` |
+
+A masker is `func(slog.Value) slog.Value`, so writing one is a single function:
+
+```go
+func LastFour(v slog.Value) slog.Value {
+    s := v.String()
+    if len(s) <= 4 {
+        return slog.StringValue("****")
+    }
+    return slog.StringValue("****" + s[len(s)-4:])
+}
+
+cloak.WithKeys(LastFour, "card_number")
+```
 
 Maskers operate on the string form of the value and are rune-aware, so multibyte text is
 not cut mid-character.
@@ -532,10 +553,10 @@ The short version, each record measured against itself logged straight to `slog`
 
 | | bare slog | with cloak | delta |
 | --- | --- | --- | --- |
-| 4 attributes, nothing to mask | 527 ns, 0 allocs | 622 ns, 0 allocs | **+95 ns** |
-| key lookup in isolation | — | 11 ns, 0 allocs | — |
-| 9 detectors over clean sentences | — | 180 ns, 0 allocs | — |
-| `slog.Any` with a struct | 785 ns, 1 alloc | 1549 ns, 6 allocs | +764 ns |
+| 4 attributes, nothing to match | 448 ns, 0 allocs | 569 ns, 0 allocs | **+121 ns** |
+| key lookup in isolation | — | 9 ns, 0 allocs | — |
+| 9 detectors over clean sentences | — | 176 ns, 0 allocs | — |
+| `slog.Any` with a struct | 729 ns, 1 alloc | 1465 ns, 6 allocs | +736 ns |
 
 On that row cloak is **1.95 times cheaper than the one other library that can be
 configured for it, and allocates a twelfth as much** — 1754 ns and 5 allocations against
@@ -543,16 +564,16 @@ masq's 3424 ns and 63.
 
 Three things to take from it:
 
-- **The quiet path is cheap and allocation-free.** Under 100 ns over bare for a record
-  where nothing matched. Key lookup is a single map hit, and a lookup that misses
-  never materializes the folded key, so even `snake_case` names cost nothing. A walked
-  struct or slice where nothing matched costs nothing either, at any width: the copy and
-  the fallback are built only once something changes.
+- **The quiet path is cheap and allocation-free.** About 120 ns over bare for a record
+  where nothing matched, and nothing allocated. Key lookup is a single map hit, and a
+  lookup that misses never materializes the folded key, so even `snake_case` names cost
+  nothing. A walked struct or slice where nothing matched costs nothing either, at any
+  width: the copy and the fallback are built only once something changes.
 - **A rule that fires is not the expensive part.** Finding the value was. What a match
-  costs is the replacement itself — a new string is two allocations, which is the
-  floor, and the detector rows sit exactly on it.
-- **Reflection costs an order of magnitude more** and is opt-in for that reason. The
-  0.8–1.4 µs of the walk rows is the price of rebuilding the container: boxing each
+  costs is the replacement itself — a new string is two allocations, which is the floor,
+  and the detector and message rows sit exactly on it.
+- **Reflection costs several times more** and is opt-in for that reason. The
+  0.7–1.4 µs of the walk rows is the price of rebuilding the container: boxing each
   element out of reflection, the copy, and the masked strings.
 
 ## Gotchas

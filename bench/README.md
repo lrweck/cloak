@@ -32,23 +32,25 @@ handler chain, not the cost of formatting or of writing bytes.
 
 ## Scenarios
 
-Intel Core i7-13700H, Go 1.27, `linux/amd64`. Each row is the same record through a
-bare handler and through cloak; the delta is the masking.
+Intel Core i7-13700H, Go 1.27, `linux/amd64`, `-benchtime 1s -count 6`, best of six. One
+`go test -bench .` run produced every row here and every row in the root README, so the
+two files cannot disagree. The delta is the masking; run-to-run it varies by tens of
+nanoseconds.
 
 | Scenario | bare slog | with cloak | delta | what it exercises |
 | --- | --- | --- | --- | --- |
-| `no_pii_text` | 520 ns, 0 allocs | 620 ns, 0 allocs | **+100 ns** | nothing matched |
-| `key_only_no_detectors` | 469 ns, 0 allocs | 692 ns, 0 allocs | +223 ns | 102 key rules, no format scan |
-| `key_rule_fires` | 418 ns, 0 allocs | 564 ns, 0 allocs | +146 ns | one key rule redacting |
-| `detector_fires` | 412 ns, 0 allocs | 828 ns, 2 allocs | +416 ns | the email detector matching |
-| `preset_mixed_record` | 651 ns, 0 allocs | 970 ns, 0 allocs | +319 ns | keys and detectors together |
-| `preset_wide_record` | 1562 ns, 1 alloc | 2793 ns, 2 allocs | +1231 ns | 20 attributes, mostly unmatched |
-| `groups_nested` | 715 ns, 0 allocs | 1149 ns, 4 allocs | +434 ns | two nested groups |
-| `struct_walk` | 785 ns, 1 alloc | 1549 ns, 6 allocs | +764 ns | `slog.Any` with a struct |
-| `map_walk` | 1319 ns, 10 allocs | 2582 ns, 23 allocs | +1263 ns | `slog.Any` with a map |
-| `slice_walk` | 691 ns, 1 alloc | 2121 ns, 17 allocs | +1430 ns | `slog.Any` with a slice |
-| `message_scan` | 421 ns, 0 allocs | 934 ns, 2 allocs | +513 ns | an email inside the message |
-| `context_attrs` | 449 ns, 0 allocs | 1645 ns, 8 allocs | +1196 ns | a masked pull on every record |
+| `no_pii_text` | 448 ns, 0 allocs | 569 ns, 0 allocs | **+121 ns** | no PII in the text |
+| `key_only_no_detectors` | 458 ns, 0 allocs | 588 ns, 0 allocs | **+130 ns** | 102 key rules, no format scan |
+| `key_rule_fires` | 382 ns, 0 allocs | 455 ns, 0 allocs | **+73 ns** | one key rule redacting |
+| `detector_fires` | 390 ns, 0 allocs | 792 ns, 2 allocs | +402 ns | the email detector matching |
+| `preset_mixed_record` | 612 ns, 0 allocs | 897 ns, 0 allocs | +285 ns | keys and detectors together |
+| `preset_wide_record` | 1484 ns, 1 allocs | 2693 ns, 2 allocs | +1209 ns | 20 attributes, mostly unmatched |
+| `groups_nested` | 576 ns, 0 allocs | 1086 ns, 4 allocs | +510 ns | two nested groups |
+| `struct_walk` | 729 ns, 1 allocs | 1465 ns, 6 allocs | +736 ns | `slog.Any` with a struct |
+| `map_walk` | 1291 ns, 10 allocs | 2489 ns, 23 allocs | +1198 ns | `slog.Any` with a map |
+| `slice_walk` | 660 ns, 1 allocs | 2010 ns, 17 allocs | +1350 ns | `slog.Any` with a slice |
+| `message_scan` | 415 ns, 0 allocs | 884 ns, 2 allocs | +470 ns | an email inside the message |
+| `context_attrs` | 386 ns, 0 allocs | 1654 ns, 8 allocs | +1268 ns | a masked pull on every record |
 
 ### What the numbers say
 
