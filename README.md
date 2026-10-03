@@ -592,22 +592,42 @@ struct field. Masking the key instead would protect nothing — `map[[REDACTED]:
 the same leak wearing a hat. The key name survives, because it is the field name and not
 the secret.
 
-**Unexported fields and fields tagged `slog:"-"` are dropped from a walked struct.**
-`encoding/json` ignores an unexported field, but `TextHandler` renders a struct with
-`%+v` and prints them, so copying one through would hand it to the sink:
+**An unexported field, or one tagged `slog:"-"`, is left at its zero value when the
+struct is walked.** It is not removed from the output — the key stays, holding an empty
+value. What never reaches the sink is the name and anything in it:
 
 ```go
 type acct struct {
     ID       int
     password string
 }
-slog.Info("m", "a", acct{ID: 7, password: "hunter2"})
-// TextHandler: a="{ID:7 password:}"
+type guest struct {
+    ID    int    `slog:"-"`
+    Email string `slog:"-"`
+}
+
+// TextHandler: acct -> a="{ID:7 password:}"      guest -> a="{ID:0 Email:}"
+// JSONHandler:  acct -> "a":{"ID":7}              guest -> "a":{"ID":0,"Email":""}
 ```
 
-A struct carrying one of these fields always rebuilds, even when no rule matched, because
-dropping the field is itself the change. A struct with only exported fields passes
-through untouched.
+`encoding/json` omits an unexported field outright, which is why the JSON column differs
+for `acct`. `TextHandler` renders a struct with `%+v` and prints everything, so copying a
+field through would hand it to the sink — hence the zero. A struct carrying one of these
+fields always rebuilds, even when no rule matched, because zeroing the field is itself
+the change. A struct with only exported fields passes through untouched.
+
+Two things that tag does not do, both of which cost someone an afternoon:
+
+- **`json:"-"` is not honoured by the walk.** `encoding/json` honours it, so on
+  `JSONHandler` the field disappears either way and you will not notice. On
+  `TextHandler`, `%+v` ignores it and cloak does not look for it, so
+  `a="{ID:7 Email:a@b.com}"` — the value printed. Writing `slog:"-"` is what stops that,
+  and the difference only shows up on the text handler, which is why the JSON column
+  above hides it.
+- **The namespace is fixed, not configured.** `WithTag` takes the key as an argument so
+  that rules for different namespaces coexist, but the `slog` here is not routed through
+  it. `WithTag(Redact, "log", "secret")` does not make `log:"-"` mean anything, and
+  `WithTag(Redact, "slog", "-")` would add a masking rule for the literal key `-`.
 
 **A struct with a changed pointer field widens to a group on `TextHandler`.** Cloak
 follows the pointer and rewrites the value behind it, but `fmt` renders a nested

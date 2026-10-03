@@ -95,6 +95,10 @@ func (h *Handler) walk(x any, depth int) (any, bool) {
 
 	v := reflect.ValueOf(x)
 	switch v.Kind() {
+	case reflect.String:
+		if s, ok := h.maskString(v.String()); ok {
+			return s, true
+		}
 	case reflect.Pointer:
 		if v.IsNil() {
 			return x, false
@@ -121,11 +125,6 @@ func (h *Handler) walk(x any, depth int) (any, bool) {
 
 	case reflect.Slice:
 		return h.walkSlice(v, depth)
-
-	case reflect.String:
-		if s, ok := h.maskString(v.String()); ok {
-			return s, true
-		}
 	}
 	return x, false
 }

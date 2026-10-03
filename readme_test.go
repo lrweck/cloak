@@ -293,21 +293,72 @@ func TestReadmeWithContain(t *testing.T) {
 }
 
 // The README claims unexported fields do not reach a TextHandler.
-func TestReadmeUnexportedDropped(t *testing.T) {
+// What the README now says: an unexported field or one tagged slog:"-" is left at its
+// zero value, not removed. The key stays in the output holding nothing.
+//
+// The earlier version of this only checked that the secret did not leak, which is why
+// the README could describe the field as dropped while it was zeroed: both satisfy "no
+// leak", and nothing here pinned which one it was.
+func TestReadmeUnexportedFieldIsZeroedNotDropped(t *testing.T) {
 	type acct struct {
 		ID       int
 		password string
 	}
-	var b bytes.Buffer
-	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), cloak.WithStructScan()))
-	logger.Info("m", "a", acct{ID: 7, password: "hunter2"})
-
-	got := b.String()
-	if strings.Contains(got, "hunter2") {
-		t.Fatalf("unexported field leaked: %s", got)
+	type guest struct {
+		ID    int    `slog:"-"`
+		Email string `slog:"-"`
 	}
-	if !strings.Contains(got, "ID:7") {
-		t.Fatalf("exported field must survive: %s", got)
+
+	t.Run("text", func(t *testing.T) {
+		var b bytes.Buffer
+		logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil), cloak.WithStructScan()))
+		logger.Info("m", "a", acct{ID: 7, password: "hunter2"})
+		got := b.String()
+		if strings.Contains(got, "hunter2") {
+			t.Fatalf("unexported field leaked: %s", got)
+		}
+		if !strings.Contains(got, "password:") {
+			t.Errorf("the key stays, holding its zero value: %s", got)
+		}
+		if !strings.Contains(got, "ID:7") {
+			t.Fatalf("exported field must survive: %s", got)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		var b bytes.Buffer
+		logger := slog.New(cloak.New(slog.NewJSONHandler(&b, nil), cloak.WithStructScan()))
+		logger.Info("m", "a", guest{ID: 7, Email: "jane@example.com"})
+		got := b.String()
+		if strings.Contains(got, "jane@example.com") {
+			t.Fatalf("tagged field leaked: %s", got)
+		}
+		if !strings.Contains(got, `"Email":""`) {
+			t.Errorf("the key stays, holding its zero value: %s", got)
+		}
+	})
+}
+
+// json:"-" is honoured by encoding/json, which is what the JSON handler marshals with,
+// so the field disappears there whether or not cloak walks it. The text handler renders
+// with %+v and cloak does not look for that key, so it prints. Documented, and pinned so
+// that changing the walk to honour json:"-" shows up here rather than in a log.
+func TestReadmeJSONTagIsNotHonouredByTheWalk(t *testing.T) {
+	type guest struct {
+		ID    int    `json:"-"`
+		Email string `json:"-"`
+	}
+	v := guest{ID: 7, Email: "jane@example.com"}
+
+	var text, json bytes.Buffer
+	slog.New(cloak.New(slog.NewTextHandler(&text, nil), cloak.WithStructScan())).Info("m", "a", v)
+	slog.New(cloak.New(slog.NewJSONHandler(&json, nil), cloak.WithStructScan())).Info("m", "a", v)
+
+	if !strings.Contains(text.String(), "jane@example.com") {
+		t.Errorf("the README says the text handler prints it: %s", text.String())
+	}
+	if strings.Contains(json.String(), "jane@example.com") {
+		t.Errorf("encoding/json drops it regardless: %s", json.String())
 	}
 }
 
