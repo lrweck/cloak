@@ -1,0 +1,13 @@
+# The three spellings below are all the same person with the same address; only the name
+# was inconsistent for a day while the identity was being settled. GitHub links them to
+# the account by address either way, so nothing was misattributed — this makes the name
+# agree with the rest of the history.
+#
+# Format is: Proper Name <proper@email>  Commit Name <commit@email>
+# Left side is who it should read as, right side is what the commit says.
+#
+# Left alone deliberately: github-actions[bot] is not a person.
+
+Luis Roberto Weck <luisrweck@gmail.com> Lucas Reweck <luisrweck@gmail.com>
+Luis Roberto Weck <luisrweck@gmail.com> LucasReweck <luisrweck@gmail.com>
+Luis Roberto Weck <luisrweck@gmail.com> Luis <luisrweck@gmail.com>
