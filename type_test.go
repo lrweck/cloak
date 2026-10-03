@@ -22,6 +22,41 @@ func logAny(opts []cloak.Options, attr slog.Attr) string {
 	return b.String()
 }
 
+// The same, but reached by walking a struct rather than by handing the value to slog
+// directly. walkStruct builds each field's slog.Value from its reflect.Type instead of
+// boxing it into an any, and that is only safe while a named type stays KindAny. Turn
+// that switch into a switch on the kind and this fails: the field becomes a plain
+// string, MaskEmail claims it, and the secret leaves as j***@example.com instead of
+// being replaced.
+func TestTypeReachesNamedFieldInsideAWalkedStruct(t *testing.T) {
+	type account struct {
+		ID    int
+		Email emailAddr
+		Note  string
+	}
+
+	var b bytes.Buffer
+	logger := slog.New(cloak.New(slog.NewTextHandler(&b, nil),
+		cloak.WithStructScan(),
+		// Both rules on: the detectors are what would claim the field if it stopped
+		// being a named type, so the test fails if the type rule loses the race.
+		cloak.WithDefaultPIIValues(),
+		cloak.WithType[emailAddr](),
+	))
+	logger.Info("m", slog.Any("user", account{ID: 7, Email: "john@example.com", Note: "ok"}))
+
+	got := b.String()
+	if strings.Contains(got, "john@example.com") {
+		t.Fatalf("leaked: %s", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Errorf("expected the type rule to replace the value, not a detector to trim it: %s", got)
+	}
+	if strings.Contains(got, "j***@example.com") {
+		t.Errorf("the field was treated as a plain string, so MaskEmail claimed it: %s", got)
+	}
+}
+
 func TestTypeMasksAttribute(t *testing.T) {
 	got := logAny([]cloak.Options{cloak.WithType[emailAddr]()},
 		slog.Any("mail", emailAddr("john@example.com")))

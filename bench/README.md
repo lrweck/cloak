@@ -43,11 +43,11 @@ nanoseconds.
 | `key_rule_fires` | 378 ns, 0 allocs | 452 ns, 0 allocs | **+73 ns** | one key rule redacting |
 | `detector_fires` | 383 ns, 0 allocs | 761 ns, 2 allocs | +378 ns | the email detector matching |
 | `preset_mixed_record` | 614 ns, 0 allocs | 898 ns, 0 allocs | +283 ns | keys and detectors together |
-| `preset_wide_record` | 1518 ns, 1 allocs | 2636 ns, 2 allocs | +1118 ns | 20 attributes, mostly unmatched |
+| `preset_wide_record` | 1518 ns, 1 alloc | 2636 ns, 2 allocs | +1118 ns | 20 attributes, mostly unmatched |
 | `groups_nested` | 566 ns, 0 allocs | 1072 ns, 4 allocs | +506 ns | two nested groups |
-| `struct_walk` | 746 ns, 1 allocs | 1449 ns, 6 allocs | +703 ns | `slog.Any` with a struct |
+| `struct_walk` | 746 ns, 1 alloc | 1449 ns, 6 allocs | +703 ns | `slog.Any` with a struct |
 | `map_walk` | 1265 ns, 10 allocs | 2418 ns, 23 allocs | +1153 ns | `slog.Any` with a map |
-| `slice_walk` | 640 ns, 1 allocs | 1950 ns, 17 allocs | +1310 ns | `slog.Any` with a slice |
+| `slice_walk` | 640 ns, 1 alloc | 1950 ns, 17 allocs | +1310 ns | `slog.Any` with a slice |
 | `message_scan` | 404 ns, 0 allocs | 874 ns, 2 allocs | +470 ns | an email inside the message |
 | `context_attrs` | 388 ns, 0 allocs | 1589 ns, 8 allocs | +1201 ns | a masked pull on every record |
 | `key_only_no_detectors` | 452 ns, 0 allocs | 564 ns, 0 allocs | **+113 ns** | 102 key rules, no format scan |

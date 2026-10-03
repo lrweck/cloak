@@ -134,7 +134,9 @@ func (h *Handler) walk(x any, depth int) (any, bool) {
 // slog reports as KindString, which is what lets walkElem hand a value to the rules
 // without boxing it into an any first. A named string type would arrive as KindAny and
 // has to go the ordinary way.
-var plainString = reflect.TypeFor[string]()
+// plainString is typeString under the name the width checks use, since what those ask
+// is whether a value is a bare string rather than any string at all.
+var plainString = typeString
 
 // walkElem masks a container element straight from reflection, at the depth it sits.
 //
@@ -231,6 +233,52 @@ func (h *Handler) walkValue(v slog.Value, depth int) (slog.Value, bool) {
 //
 // tag is the field's struct tag value under the configured tag key, empty when the
 // field carries none.
+// The predeclared types the walk needs to recognise, cached because two switch
+// statements compare against them. Not for speed: reflect.TypeFor is generic over a
+// compile-time type and the compiler folds it to a static symbol either way, which an
+// A/B on struct_walk confirmed. Named types are deliberately absent — see valueFromField
+// for why that matters more than the lookup costs.
+var (
+	typeString   = reflect.TypeFor[string]()
+	typeBool     = reflect.TypeFor[bool]()
+	typeInt      = reflect.TypeFor[int]()
+	typeInt64    = reflect.TypeFor[int64]()
+	typeUint     = reflect.TypeFor[uint]()
+	typeUint64   = reflect.TypeFor[uint64]()
+	typeFloat64  = reflect.TypeFor[float64]()
+	typeDuration = reflect.TypeFor[time.Duration]()
+	typeTime     = reflect.TypeFor[time.Time]()
+)
+
+// valueFromField builds a struct field's slog.Value without boxing it into an any
+// first. slog.AnyValue(fv.Interface()) allocates for the interface and then unwraps
+// it, while the scalar constructors store the value directly in the Value, so a field
+// of a predeclared type costs nothing to read.
+//
+// The switch is on the field's TYPE and not its kind, and that is the whole safety of
+// this. A named type over a predeclared one — type Password string — is stored by slog
+// as KindAny, not KindString, which is what lets WithType reach a value the string
+// detectors never see. Building StringValue for it would silently turn a typed secret
+// into an untyped string, hand it to MaskEmail, and mask it as a partial address
+// instead of replacing it. A named type has a package path, so it never matches here
+// and keeps going through Interface().
+func valueFromField(fv reflect.Value) slog.Value {
+	switch fv.Type() {
+	case typeString:
+		return slog.StringValue(fv.String())
+	case typeBool:
+		return slog.BoolValue(fv.Bool())
+	case typeInt, typeInt64:
+		return slog.Int64Value(fv.Int())
+	case typeUint, typeUint64:
+		return slog.Uint64Value(fv.Uint())
+	case typeFloat64:
+		return slog.Float64Value(fv.Float())
+	default:
+		return slog.AnyValue(fv.Interface())
+	}
+}
+
 func (h *Handler) walkField(name, tag string, v slog.Value, depth int) (slog.Value, bool) {
 	if m, ok := h.cfg.maskerForKey(name); ok {
 		return m(v.Resolve()), true
@@ -309,7 +357,7 @@ func (h *Handler) walkStruct(v reflect.Value, depth int) (any, bool) {
 			continue
 		}
 		fv := v.Field(i)
-		out, c := h.walkField(f.Name, h.cfg.tagValue(f), slog.AnyValue(fv.Interface()), depth+1)
+		out, c := h.walkField(f.Name, h.cfg.tagValue(f), valueFromField(fv), depth+1)
 		if !c {
 			// Unchanged. dst carries the copy only if it was allocated before this
 			// field; structCopy filled in whatever came earlier.
@@ -377,10 +425,15 @@ func structCopy(v reflect.Value, t reflect.Type, i int) reflect.Value {
 // its shape. dst holds the right value for every index below i — the shape cannot
 // have survived past the first unrepresentable field — so the prefix is rebuilt from
 // the copy rather than from a second walk.
+// groupPrefix copies the fields a widening struct does not reach into attributes, which
+// is the only shape they can take once the struct gives up its type. The value comes
+// from valueFromField for the same reason walkStruct uses it: a predeclared scalar does
+// not have to be boxed into an any on the way to becoming a slog.Value, and this runs
+// once per untouched field of every struct that widens.
 func groupPrefix(dst reflect.Value, t reflect.Type, i int) []slog.Attr {
 	attrs := make([]slog.Attr, 0, t.NumField())
 	for j := range i {
-		attrs = append(attrs, slog.Any(t.Field(j).Name, dst.Field(j).Interface()))
+		attrs = append(attrs, slog.Attr{Key: t.Field(j).Name, Value: valueFromField(dst.Field(j))})
 	}
 	return attrs
 }
@@ -589,37 +642,37 @@ func maskInto(field reflect.Value, sv slog.Value, t reflect.Type) bool {
 func setScalar(field reflect.Value, sv slog.Value, t reflect.Type) bool {
 	switch sv.Kind() {
 	case slog.KindString:
-		if t == reflect.TypeFor[string]() {
+		if t == typeString {
 			field.SetString(sv.String())
 			return true
 		}
 	case slog.KindInt64:
-		if t == reflect.TypeFor[int64]() {
+		if t == typeInt64 {
 			field.SetInt(sv.Int64())
 			return true
 		}
 	case slog.KindUint64:
-		if t == reflect.TypeFor[uint64]() {
+		if t == typeUint64 {
 			field.SetUint(sv.Uint64())
 			return true
 		}
 	case slog.KindFloat64:
-		if t == reflect.TypeFor[float64]() {
+		if t == typeFloat64 {
 			field.SetFloat(sv.Float64())
 			return true
 		}
 	case slog.KindBool:
-		if t == reflect.TypeFor[bool]() {
+		if t == typeBool {
 			field.SetBool(sv.Bool())
 			return true
 		}
 	case slog.KindDuration:
-		if t == reflect.TypeFor[time.Duration]() {
+		if t == typeDuration {
 			field.SetInt(int64(sv.Duration()))
 			return true
 		}
 	case slog.KindTime:
-		if t == reflect.TypeFor[time.Time]() {
+		if t == typeTime {
 			field.Set(reflect.ValueOf(sv.Time()))
 			return true
 		}
